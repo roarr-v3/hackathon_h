@@ -4,6 +4,7 @@ CLI:
     raven-core serve [--port 8787] [--host 0.0.0.0]   HTTP/WS API (AGENTS.md)
     raven-core acp                                    ACP stdio agent (for t3code)
     raven-core run <spec> [--platforms linux,macos]   run a spec in-process, print events
+    raven-core agent <platform> "<task>"              one agent on the running server, followed live
 """
 
 from __future__ import annotations
@@ -89,6 +90,37 @@ async def _run_cli(spec: str, platforms: str | None, as_json: bool) -> int:
     return 0 if final == "passed" else 1
 
 
+async def _agent_cli(platform: str, task: str, server: str) -> int:
+    """Start one agent on the running server and stream its events until it finishes."""
+    import asyncio
+    import json
+
+    import httpx
+    import websockets
+
+    from raven_core.events import Event
+
+    async with httpx.AsyncClient(base_url=server, timeout=30) as http:
+        agent = (await http.post("/agents", json={"platform": platform, "task": task})).raise_for_status().json()
+        print(f"agent {agent['id']} on {agent['worker']}  (screenshots: artifacts/{agent['id']}/)", flush=True)
+        ws_url = server.replace("http", "ws", 1).rstrip("/") + f"/ws/events?agent_id={agent['id']}"
+        status = "unknown"
+        try:
+            async with websockets.connect(ws_url, max_size=None) as ws:
+                async for raw in ws:
+                    ev = Event.model_validate(json.loads(raw))
+                    if ev.agent_id != agent["id"]:
+                        continue
+                    print(_fmt_event(ev), flush=True)
+                    if ev.type == "agent.status" and ev.data.get("status") in ("passed", "failed", "stopped", "error"):
+                        status = ev.data["status"]
+                        break
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            await http.post(f"/agents/{agent['id']}/stop")
+            status = "stopped"
+    return 0 if status == "passed" else 1
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
     import asyncio
@@ -108,6 +140,10 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("spec")
     r.add_argument("--platforms", default=None, help="comma separated, e.g. linux,macos")
     r.add_argument("--json", action="store_true", help="print raw Event JSON lines")
+    a = sub.add_parser("agent", help="start one agent on the running server and follow it")
+    a.add_argument("platform", choices=["linux", "macos", "windows", "ios"])
+    a.add_argument("task")
+    a.add_argument("--server", default=os.environ.get("RAVEN_URL") or f"http://localhost:{os.environ.get('RAVEN_PORT') or 8787}")
     args = p.parse_args(argv)
     _setup_logging()
 
@@ -129,3 +165,8 @@ def main(argv: list[str] | None = None) -> None:
             pass
     elif args.cmd == "run":
         sys.exit(asyncio.run(_run_cli(args.spec, args.platforms, args.json)))
+    elif args.cmd == "agent":
+        try:
+            sys.exit(asyncio.run(_agent_cli(args.platform, args.task, args.server)))
+        except KeyboardInterrupt:
+            sys.exit(130)
