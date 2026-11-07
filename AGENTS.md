@@ -68,7 +68,13 @@ Linux Docker container) and remote cua-spacesd (Windows PC over Tailscale).
 ## Commands
 - Python: `cd raven-core && uv run raven-core serve` · tests `uv run pytest`
 - Docker runtime: `colima start` (installed via brew). Cua CLI: `cua sb ls`.
-- t3code: `cd t3code && pnpm install && pnpm dev` (Node 26, pnpm 12).
+- t3code (Raven Agent desktop), Node 26 / pnpm 12, run from `t3code/` with `PATH=$PWD/node_modules/.bin:$PATH`:
+  - build once: `npx vp run --filter @t3tools/desktop --filter t3 build`
+  - launch (single process, no watcher): `T3CODE_HOME=$PWD/.t3 node apps/desktop/scripts/start-electron.mjs`
+  - Avoid `dev:desktop` for demos: its `dev-electron.mjs` watcher relaunches Electron on every
+    rebuild and orphaned watchers respawn windows in a loop. Never point at `~/.t3` (real data).
+  - Headless E2E: `node scripts/dev-runner.ts dev:server --home-dir /tmp/raven-t3-test --no-seed`, then
+    `node apps/server/src/bin.ts thread start --base-dir /tmp/raven-t3-test --provider raven --model holo4-27b --wait <project-id> "help"`.
 - iOS: open `ios/RavenMobile/RavenMobile.xcodeproj` (Xcode 27).
 
 ## Secrets
