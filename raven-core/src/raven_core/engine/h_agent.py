@@ -55,7 +55,8 @@ async def run_h_agent(
     """Never raises (except CancelledError, after emitting a verdict)."""
     shot_dir = Path(artifacts_dir) / agent.id
     shot_dir.mkdir(parents=True, exist_ok=True)
-    mode = mode or os.environ.get("RAVEN_H_MODE", "local-runtime")
+    env_mode = os.environ.get("RAVEN_H_MODE")
+    mode = mode or (env_mode if env_mode and env_mode != "models-loop" else None) or getattr(host, "default_mode", "local-runtime")
     model = model or os.environ.get("HAI_MODEL") or None
     timeout_s = timeout_s or float(os.environ.get("RAVEN_AGENT_TIMEOUT_S", 600))
     n_shot = 0
@@ -152,15 +153,25 @@ async def run_h_agent(
                 await finish(AgentStatus.passed if passed else AgentStatus.failed, passed, reason)
         else:
             reader.cancel()
-            proc.terminate()
+            await _shutdown(proc)
             await finish(AgentStatus.stopped, False, "stopped by user" if stopper in done else f"timed out after {timeout_s:.0f}s")
     except asyncio.CancelledError:
-        if proc and proc.returncode is None:
-            proc.terminate()
+        await asyncio.shield(_shutdown(proc))
         await finish(AgentStatus.stopped, False, "cancelled")
         raise
     except Exception as e:  # noqa: BLE001
         log.exception("h agent failed")
-        if proc and proc.returncode is None:
-            proc.terminate()
+        await _shutdown(proc)
         await finish(AgentStatus.error, False, f"{type(e).__name__}: {e}")
+
+
+async def _shutdown(proc: asyncio.subprocess.Process | None, grace_s: float = 10.0) -> None:
+    """Close stdin so the host cancels its H session (frees the plan's concurrency slot), then kill."""
+    if proc is None or proc.returncode is not None:
+        return
+    if proc.stdin and not proc.stdin.is_closing():
+        proc.stdin.close()
+    try:
+        await asyncio.wait_for(proc.wait(), grace_s)
+    except (TimeoutError, asyncio.TimeoutError):
+        proc.terminate()

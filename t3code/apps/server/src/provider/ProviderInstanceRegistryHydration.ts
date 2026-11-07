@@ -126,6 +126,24 @@ export const seedDevReplayInstance = Effect.fn(
 
 const RAVEN_INSTANCE_ID = ProviderInstanceId.make("raven");
 const DEVIN_INSTANCE_ID = ProviderInstanceId.make("devin");
+const DEVIN_CLOUD_INSTANCE_ID = ProviderInstanceId.make("devin-cloud");
+const DEVIN_REGISTRY_CONFIG = { source: "registry", agentId: "devin" };
+
+// DEVIN_CLI_PATH wins; otherwise the CLI bundled with Devin Desktop, then a user install.
+const findDevinCli = Effect.fn("ProviderInstanceRegistryHydration.findDevinCli")(function* () {
+  const path = yield* Path.Path;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const environment = yield* HostProcess.Environment;
+  const candidates = [
+    environment.DEVIN_CLI_PATH?.trim(),
+    "/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin",
+    environment.HOME ? path.join(environment.HOME, ".local", "bin", "devin") : undefined,
+  ];
+  for (const candidate of candidates) {
+    if (candidate && (yield* fileSystem.exists(candidate))) return candidate;
+  }
+  return undefined;
+});
 
 // RAVEN_CORE_PROJECT wins; otherwise Raven Desktop runs from a checkout with raven-core beside t3code.
 const findRavenCoreProject = Effect.fn("ProviderInstanceRegistryHydration.findRavenCoreProject")(
@@ -159,11 +177,35 @@ const seedRavenInstances = Effect.fn(
   const serverSettings = yield* Settings.ServerSettingsService;
   const instances = (yield* serverSettings.getSettings).providerInstances;
   const driver = ProviderDriverKind.make("acpRegistry");
-  if (instances[DEVIN_INSTANCE_ID] === undefined) {
+  const devinCli = yield* findDevinCli();
+  const devinSeeds = [
+    { id: DEVIN_INSTANCE_ID, displayName: "Devin", args: ["acp"] },
+    { id: DEVIN_CLOUD_INSTANCE_ID, displayName: "Devin Cloud", args: ["acp", "--cloud"] },
+  ];
+  for (const seed of devinSeeds) {
+    const current = instances[seed.id];
+    // Replace only missing or still-default registry entries, so user edits survive.
+    const isDefault =
+      current === undefined || NodeUtil.isDeepStrictEqual(current.config, DEVIN_REGISTRY_CONFIG);
+    if (!isDefault) continue;
+    if (devinCli === undefined) {
+      if (current === undefined && seed.id === DEVIN_INSTANCE_ID) {
+        yield* serverSettings.updateProviderInstance({
+          operation: "upsert",
+          instanceId: seed.id,
+          instance: { displayName: seed.displayName, driver, config: DEVIN_REGISTRY_CONFIG },
+        });
+      }
+      continue;
+    }
     yield* serverSettings.updateProviderInstance({
       operation: "upsert",
-      instanceId: DEVIN_INSTANCE_ID,
-      instance: { displayName: "Devin", driver, config: { source: "registry", agentId: "devin" } },
+      instanceId: seed.id,
+      instance: {
+        displayName: seed.displayName,
+        driver,
+        config: { source: "local", commandPath: devinCli, commandArgs: seed.args },
+      },
     });
   }
   const project = yield* findRavenCoreProject();

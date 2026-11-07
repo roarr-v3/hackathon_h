@@ -74,6 +74,8 @@ class DockerHost(Host):
     `cua sb exec` mangles sudo/env args and doesn't stream stdin."""
 
     kind = "cua-local"
+    # H ships no hai-agent-runtime for linux-arm64 (Apple-silicon containers), so the loop runs at H.
+    default_mode = "agents-api"
 
     def __init__(self, platform: Platform, container: str, user: str = "cua", display: str = ":1"):
         super().__init__(platform, container)
@@ -82,12 +84,22 @@ class DockerHost(Host):
     def _exec(self, *cmd: str, interactive: bool = False, env: dict[str, str] | None = None) -> list[str]:
         argv = ["docker", "exec"] + (["-i"] if interactive else [])
         argv += ["-u", self.user, "-w", self.home, "-e", f"HOME={self.home}", "-e", f"DISPLAY={self.display}"]
+        argv += ["-e", "XDG_SESSION_TYPE=x11"]  # pyscreeze only uses scrot when it knows it's on X11
         for k in env or {}:
             argv += ["-e", k]  # value inherited from our process env; never on the command line
         return argv + [self.name, *cmd]
 
     async def prepare(self) -> None:
-        rc, out = await _run(*self._exec("bash", "-lc", "test -x $HOME/.local/bin/holo || uv tool install 'hai-agents[cli,desktop]>=1.4.3'"))
+        # H's desktop driver (pyautogui): mouseinfo sys.exit()s without tkinter, pyscreeze needs scrot,
+        # Xlib wants an ~/.Xauthority file even on an auth-less Xvfb.
+        rc, out = await _run(
+            "docker", "exec", "-u", "root", self.name, "bash", "-c",
+            "dpkg -s python3-tk scrot >/dev/null 2>&1 || (export DEBIAN_FRONTEND=noninteractive; "
+            "apt-get update -qq && apt-get install -y -qq python3-tk scrot python3-dev gcc)",
+        )
+        if rc:
+            raise WorkerUnavailable(f"{self!r}: installing desktop driver deps failed: {out[-400:]}")
+        rc, out = await _run(*self._exec("bash", "-lc", "touch $HOME/.Xauthority; test -x $HOME/.local/bin/holo || uv tool install 'hai-agents[cli,desktop]>=1.4.3'"))
         if rc:
             raise WorkerUnavailable(f"{self!r}: installing hai-agents failed: {out[-400:]}")
         rc, out = await _run("docker", "cp", str(HOST_SCRIPT), f"{self.name}:{self.home}/raven_host.py")

@@ -105,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-steps", type=int, default=60)
     ap.add_argument("--max-time", type=float, default=600)
     ap.add_argument("--shots-dir", default=os.environ.get("RAVEN_SHOTS_DIR", "/tmp/raven-shots"))
+    ap.add_argument("--no-cancel-on-eof", dest="cancel_on_eof", action="store_false",
+                    help="keep running when stdin closes (manual runs with </dev/null)")
     args = ap.parse_args(argv)
 
     from hai_agents import Client
@@ -133,6 +135,13 @@ def main(argv: list[str] | None = None) -> int:
                     out("steered", text=line.strip())
                 except Exception as e:  # noqa: BLE001
                     out("error", error=f"steer failed: {e}")
+        if args.cancel_on_eof:
+            # raven-core closed our stdin (stop, or its `docker exec` client died): free the H slot.
+            try:
+                handle.cancel()
+            finally:
+                out("result", status="interrupted", answer=None, outcome=None, error="stopped by raven-core")
+                os._exit(130)
 
     threading.Thread(target=steer, daemon=True).start()
     try:
