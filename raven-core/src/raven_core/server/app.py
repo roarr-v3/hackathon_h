@@ -50,11 +50,14 @@ def create_app(raven: Raven | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         raven.store.bind_loop(asyncio.get_running_loop())
         settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        if app.state.serve_background:
+            raven.start_background()
         yield
         await raven.shutdown()
 
     app = FastAPI(title="raven-core", lifespan=lifespan)
     app.state.raven = raven
+    app.state.serve_background = False  # `raven-core serve` turns this on (idle machine reaper)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

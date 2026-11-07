@@ -155,7 +155,9 @@ def main(argv: list[str] | None = None) -> None:
         port = getattr(args, "port", None) or int(os.environ.get("RAVEN_PORT") or 8787)
         host = getattr(args, "host", None) or "0.0.0.0"
         os.environ["RAVEN_PORT"] = str(port)
-        uvicorn.run(create_app(), host=host, port=port, log_level="info")
+        app = create_app()
+        app.state.serve_background = True
+        uvicorn.run(app, host=host, port=port, log_level="info")
     elif args.cmd == "acp":
         from raven_core.acp import serve_stdio
 

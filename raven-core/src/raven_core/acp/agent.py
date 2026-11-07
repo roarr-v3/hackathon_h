@@ -31,6 +31,56 @@ from raven_core.acp.backend import HttpBackend, LocalBackend, agent_terminal
 from raven_core.acp.jsonrpc import Connection, MethodNotFound, RpcError
 from raven_core.server.intents import HELP, parse_command, parse_platforms
 
+def raven_url() -> str:
+    return os.environ.get("RAVEN_URL") or f"http://localhost:{os.environ.get('RAVEN_PORT') or 8787}"
+
+
+async def _healthy(url: str, timeout: float = 1.5) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.get(url.rstrip("/") + "/health")
+            return r.status_code == 200 and bool(r.json().get("ok"))
+    except Exception:
+        return False
+
+
+async def ensure_daemon(url: str, wait_s: float = 20.0) -> bool:
+    """Start `raven-core serve` detached (outlives this ACP process) unless it already answers.
+
+    This is what makes "open Raven Agent" enough: the app probes the Raven provider at startup,
+    the probe lands here, and the server keeps running for the iPhone and other threads.
+    """
+    if await _healthy(url):
+        return True
+    if any(os.environ.get(k, "1") in ("0", "false") for k in ("RAVEN_ACP_DAEMON", "RAVEN_ACP_SERVE")):
+        return False
+    import subprocess
+    import sys
+
+    from raven_core.machines import tool_env
+    from raven_core.server.config import REPO_ROOT
+
+    parsed = urlparse(url)
+    if parsed.hostname not in ("localhost", "127.0.0.1", None):
+        return False  # remote server: not ours to start
+    logs = REPO_ROOT / "artifacts" / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    host = "0.0.0.0" if os.environ.get("RAVEN_TOKEN") else "127.0.0.1"
+    cmd = [sys.executable, "-m", "raven_core", "serve", "--host", host, "--port", str(parsed.port or 8787)]
+    with open(logs / "raven-core.log", "ab") as log_file:
+        subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
+            cwd=str(REPO_ROOT), env=tool_env(), start_new_session=True,
+        )
+    log.info("started raven-core daemon: %s", " ".join(cmd))
+    deadline = asyncio.get_running_loop().time() + wait_s
+    while asyncio.get_running_loop().time() < deadline:
+        if await _healthy(url, timeout=1.0):
+            return True
+        await asyncio.sleep(0.5)
+    return False
+
+
 CLIENT_INSTRUCTIONS_RE = re.compile(r"<([a-z0-9_]+_instructions|runtime_info)>.*?</\1>", re.S | re.I)
 USER_REQUEST_RE = re.compile(r"<user_request>(.*?)</user_request>", re.S | re.I)
 
@@ -309,17 +359,12 @@ class RavenAcpAgent:
         return b.public_url(url) if b is not None else url
 
     async def _connect(self) -> Any:
-        url = os.environ.get("RAVEN_URL") or f"http://localhost:{os.environ.get('RAVEN_PORT') or 8787}"
+        url = raven_url()
         token = os.environ.get("RAVEN_TOKEN") or None
-        try:
-            async with httpx.AsyncClient(timeout=1.5) as c:
-                r = await c.get(url.rstrip("/") + "/health")
-                if r.status_code == 200 and r.json().get("ok"):
-                    log.info("using raven-core at %s", url)
-                    return HttpBackend(url, token)
-        except Exception:
-            pass
-        log.info("raven-core not reachable at %s; starting in-process server", url)
+        if await _healthy(url) or await ensure_daemon(url):
+            log.info("using raven-core at %s", url)
+            return HttpBackend(url, token)
+        log.info("raven-core not reachable at %s and no daemon; starting in-process server", url)
         return await self._start_in_process(url)
 
     async def _start_in_process(self, url: str) -> Any:
@@ -406,6 +451,9 @@ class RavenAcpAgent:
 
     def initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         self.client_info = params.get("clientInfo") or {}
+        # Raven Agent probes providers at startup: use that to bring raven-core up in the background.
+        task = asyncio.get_running_loop().create_task(ensure_daemon(raven_url()))
+        self._daemon_task = task
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {

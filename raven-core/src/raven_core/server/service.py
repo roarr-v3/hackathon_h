@@ -72,6 +72,12 @@ def _title_from_task(task: str) -> str:
     return t if len(t) <= 60 else t[:57] + "..."
 
 
+def _is_fake(w: Any) -> bool:
+    from raven_core.workers.fake import FakeWorker
+
+    return isinstance(w, FakeWorker) or type(w).__name__.startswith("Fake")
+
+
 def _worker_name(w: Any, platform: Platform) -> str:
     for attr in ("name", "id", "worker_id"):
         v = getattr(w, attr, None)
@@ -311,6 +317,16 @@ class Raven:
                     agent.worker = _worker_name(worker, agent.platform)
                 except Exception as e:
                     error = e
+            if error is None and not _is_fake(worker):
+                from raven_core import machines
+
+                async def say(text: str) -> None:
+                    self._sysmsg(agent, text)
+
+                try:
+                    await machines.ensure(agent.platform, say)
+                except Exception as e:  # noqa: BLE001 - surfaced to the user as a worker error
+                    error = e
             if error is not None:
                 self._sysmsg(agent, f"Worker unavailable for {agent.platform.value}: {type(error).__name__}: {error}")
                 agent.verdict_reason = f"worker unavailable: {error}"
@@ -384,6 +400,17 @@ class Raven:
 
     def active_agents(self) -> list[Agent]:
         return [a for a in self.store.agents.values() if a.status not in TERMINAL_AGENT]
+
+    def platform_busy(self, platform: Platform) -> bool:
+        return any(a.platform == platform for a in self.active_agents())
+
+    def start_background(self) -> None:
+        """Server-only background jobs (not started for in-process test/CLI uses)."""
+        from raven_core import machines
+
+        task = asyncio.get_running_loop().create_task(machines.idle_reaper(self.platform_busy), name="idle-reaper")
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
 
     def stop_all(self) -> list[str]:
         ids = [a.id for a in self.active_agents()]

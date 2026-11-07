@@ -65,6 +65,12 @@ Auth: if `RAVEN_TOKEN` is set, require `Authorization: Bearer <token>` (WS: `?to
 `shell(cmd) -> (rc, stdout, stderr)`. Implementations: Cua sandboxes (macOS Lume VM,
 Linux Docker container) and remote cua-spacesd (Windows PC over Tailscale).
 
+## Everyday use
+`bin/raven` (symlinked to `~/.local/bin/raven`, wrapped as `~/Applications/Raven Agent.app`) starts
+raven-core and Raven Agent. The ACP bridge also starts a detached raven-core daemon on `initialize`.
+`raven_core/machines.py` creates/resumes Cua sandboxes on demand (and colima) and suspends idle ones.
+Full manual steps: `TESTING.md`.
+
 ## Commands
 - Python: `cd raven-core && uv run raven-core serve` · tests `uv run pytest`
 - Docker runtime: `colima start` (installed via brew). Cua CLI: `cua sb ls`.

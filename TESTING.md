@@ -1,5 +1,30 @@
 # Raven — build, run and test
 
+## Everyday use (one click)
+
+Open **Raven Agent** from Spotlight / Launchpad (`~/Applications/Raven Agent.app`), or run `raven` in a
+terminal. That's it:
+
+- raven-core starts in the background if it isn't running (the launcher and the Raven provider both
+  ensure it), and keeps running for the iPhone app.
+- Raven Agent is built on first launch (~20 s) and opened as a single window.
+- Test machines start **when a test needs them**: Docker (colima) and the Cua Linux container for
+  `on linux: …`, the Cua macOS VM for `on macos: …` — created on first use, woken if suspended.
+- Machines nobody used for `RAVEN_IDLE_SUSPEND_MIN` minutes (default 20) are suspended to free RAM.
+
+```bash
+raven            # open (starts raven-core, builds if needed)
+raven status     # raven-core, Raven Agent, machines
+raven rebuild    # after pulling code changes
+raven stop       # stop Raven Agent + raven-core (machines keep their state)
+```
+Settings live in the repo-root `.env` (keys, `RAVEN_H_MODE`, `HAI_MODEL`, `RAVEN_IDLE_SUSPEND_MIN`).
+Logs: `artifacts/logs/`. One-time install of the launcher: `ln -sf "$PWD/bin/raven" ~/.local/bin/raven`.
+
+Everything below is the manual / debugging path.
+
+---
+
 Everything below runs from a terminal on the Mac (Apple silicon, macOS 26). Paths are relative to the
 repo root `hackathon_h/` unless stated otherwise.
 

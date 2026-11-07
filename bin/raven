@@ -1,0 +1,63 @@
+#!/bin/bash
+# Raven everyday launcher.
+#   raven            open Raven Agent (starts raven-core, builds the app if needed)
+#   raven rebuild    rebuild Raven Agent, then open it
+#   raven status     what is running
+#   raven stop       stop Raven Agent and raven-core (test machines keep their state)
+# Test machines (Cua Linux/macOS sandboxes, Docker) are started by raven-core when a test needs them.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+T3="$ROOT/t3code"
+LOGS="$ROOT/artifacts/logs"
+APP_PID="$LOGS/raven-agent.pid"
+PORT="$(grep -E '^RAVEN_PORT=' "$ROOT/.env" 2>/dev/null | cut -d= -f2)"
+PORT="${PORT:-8787}"
+mkdir -p "$LOGS"
+
+core_up() { curl -fsS -m 2 "http://localhost:$PORT/health" >/dev/null 2>&1; }
+app_up() { [ -f "$APP_PID" ] && kill -0 "$(cat "$APP_PID")" 2>/dev/null; }
+pid_on_port() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1; }
+
+start_core() {
+  core_up && return 0
+  local host=127.0.0.1
+  grep -qE '^RAVEN_TOKEN=.+' "$ROOT/.env" 2>/dev/null && host=0.0.0.0   # LAN (iPhone) only with a token
+  echo "starting raven-core on :$PORT ($host)"
+  (cd "$ROOT/raven-core" && nohup uv run raven-core serve --host "$host" --port "$PORT" >>"$LOGS/raven-core.log" 2>&1 &)
+  for _ in $(seq 1 40); do core_up && return 0; sleep 0.5; done
+  echo "raven-core did not start; see $LOGS/raven-core.log" >&2
+  return 1
+}
+
+build_app() {
+  echo "building Raven Agent (~20 s)…"
+  (cd "$T3" && [ -d node_modules ] || pnpm install)
+  (cd "$T3" && PATH="$T3/node_modules/.bin:$PATH" npx vp run --filter @t3tools/desktop --filter t3 build >"$LOGS/build.log" 2>&1) \
+    || { echo "build failed; see $LOGS/build.log" >&2; exit 1; }
+}
+
+open_app() {
+  if app_up; then echo "Raven Agent is already running"; return 0; fi
+  [ -f "$T3/apps/desktop/dist-electron/main.cjs" ] && [ -f "$T3/apps/server/dist/bin.mjs" ] || build_app
+  echo "opening Raven Agent"
+  (cd "$T3" && T3CODE_HOME="$T3/.t3" nohup node apps/desktop/scripts/start-electron.mjs >>"$LOGS/raven-agent.log" 2>&1 & echo $! >"$APP_PID")
+}
+
+case "${1:-open}" in
+  open) start_core; open_app ;;
+  rebuild) build_app; start_core; open_app ;;
+  status)
+    core_up && echo "raven-core   up   http://localhost:$PORT (pid $(pid_on_port "$PORT"))" || echo "raven-core   down"
+    app_up && echo "Raven Agent  up   (pid $(cat "$APP_PID"))" || echo "Raven Agent  down"
+    cua sb ls 2>/dev/null | sed 's/^/machines     /' || true
+    ;;
+  stop)
+    if app_up; then kill "$(cat "$APP_PID")" && echo "stopped Raven Agent"; fi
+    rm -f "$APP_PID"
+    p="$(pid_on_port "$PORT")"; [ -n "$p" ] && kill "$p" && echo "stopped raven-core"
+    true
+    ;;
+  *) sed -n '2,7p' "$0"; exit 2 ;;
+esac
