@@ -1,0 +1,15 @@
+.DS_Store
+.env
+.env.local
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+artifacts/
+*.png.tmp
+xcuserdata/
+DerivedData/
+*.xcuserstate
+node_modules/
+targets/

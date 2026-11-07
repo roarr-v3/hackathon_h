@@ -1,0 +1,29 @@
+name: bitchat-geohash-interop
+description: >
+  One bitchat client on each platform joins the same Nostr geohash channel.
+  The sender posts a random code; every other client must receive it and reply.
+vars:
+  channel: "u09t"
+  code: "{{random_word}}"
+setup:
+  linux: "bitchat-tui"
+  windows: "bitchat-tui.exe"
+  macos: "open -a bitchat"
+agents:
+  - platform: macos
+    role: sender
+    task: >
+      In bitchat, join the location channel #{{channel}}. Post the message
+      "raven {{code}}". Then wait until replies "ack {{code}} from linux" and
+      "ack {{code}} from windows" are visible.
+  - platform: linux
+    role: receiver
+    task: >
+      In bitchat-tui, join the geohash channel #{{channel}}. Wait until the
+      message "raven {{code}}" appears, then reply "ack {{code}} from linux".
+  - platform: windows
+    role: receiver
+    task: >
+      In bitchat-tui, join the geohash channel #{{channel}}. Wait until the
+      message "raven {{code}}" appears, then reply "ack {{code}} from windows".
+timeout_s: 180
