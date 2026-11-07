@@ -18,6 +18,7 @@ import io
 import json
 import logging
 import os
+import re
 import socket
 import uuid
 from dataclasses import dataclass, field
@@ -29,6 +30,9 @@ import httpx
 from raven_core.acp.backend import HttpBackend, LocalBackend, agent_terminal
 from raven_core.acp.jsonrpc import Connection, MethodNotFound, RpcError
 from raven_core.server.intents import HELP, parse_command, parse_platforms
+
+CLIENT_INSTRUCTIONS_RE = re.compile(r"<([a-z0-9_]+_instructions|runtime_info)>.*?</\1>", re.S | re.I)
+USER_REQUEST_RE = re.compile(r"<user_request>(.*?)</user_request>", re.S | re.I)
 
 log = logging.getLogger("raven.acp")
 
@@ -446,7 +450,11 @@ class RavenAcpAgent:
                 res = b.get("resource") or {}
                 if res.get("text"):
                     parts.append(str(res["text"]))
-        return "\n".join(p for p in parts if p).strip()
+        text = "\n".join(p for p in parts if p)
+        # Clients such as t3code wrap the message in their own instruction blocks; they are not the task.
+        if m := USER_REQUEST_RE.search(text):
+            return m.group(1).strip()
+        return CLIENT_INSTRUCTIONS_RE.sub("", text).strip()
 
     async def prompt(self, params: dict[str, Any]) -> dict[str, Any]:
         s = self._session(params)

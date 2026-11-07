@@ -190,6 +190,16 @@ def test_acp_agent_turn_run_turn_and_cancel(tmp_path, monkeypatch):
     asyncio.run(scenario())
 
 
+def test_prompt_text_strips_client_instruction_blocks():
+    blocks = [{"type": "text", "text": "<t3_code_instructions>\n## Mode: Default\nBe nice.\n</t3_code_instructions>\n\nhelp"}]
+    assert RavenAcpAgent.prompt_text(blocks) == "help"
+    t3 = (
+        "<t3_code_instructions>\nmode\n</t3_code_instructions>\n\n<user_request>\non linux: open a terminal\n</user_request>"
+        "\n<runtime_info>you are running in T3 Code</runtime_info>"
+    )
+    assert RavenAcpAgent.prompt_text([{"type": "text", "text": t3}]) == "on linux: open a terminal"
+
+
 def test_action_titles():
     assert action_title("[linux]", "click", {"x": 412, "y": 88}) == ("[linux] click (412, 88)", "other")
     assert action_title("[macos]", "shell", {"cmd": "uname -a"}) == ("[macos] $ uname -a", "execute")
