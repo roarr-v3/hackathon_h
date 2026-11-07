@@ -29,9 +29,9 @@ interface Recording {
   readonly token: number;
   readonly base: string;
   socket?: WebSocket;
-  stream?: MediaStream;
-  context?: AudioContext;
-  node?: AudioWorkletNode;
+  stream?: MediaStream | undefined;
+  context?: AudioContext | undefined;
+  node?: AudioWorkletNode | undefined;
   stopping: boolean;
 }
 

@@ -91,7 +91,6 @@ import { TerminalViewport } from "../ThreadTerminalDrawer";
 import { CloudEnvironmentConnectRows } from "../cloud/CloudEnvironmentConnectList";
 import { presentSavedCloudEnvironmentConnection } from "../cloud/cloudEnvironmentConnectionPresentation";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
-import { T3Wordmark } from "../T3Wordmark";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { CommandBlock } from "../CommandBlock";
@@ -239,12 +238,14 @@ export function WelcomeWizard({
         initialFocus={() => document.getElementById("onboarding-pairing-url") ?? true}
       >
         <WizardHeader
-          title="Set up T3 Code"
+          title="Set up Raven Agent"
           identity={
-            <div className="flex items-baseline gap-1.5" role="img" aria-label="T3 Code">
-              <T3Wordmark className="h-4 w-auto shrink-0" aria-hidden />
+            <div className="flex items-baseline gap-1.5" role="img" aria-label="Raven Agent">
+              <span className="text-2xl font-semibold tracking-tight" aria-hidden>
+                Raven
+              </span>
               <span className="text-2xl font-medium tracking-tight text-muted-foreground">
-                Code
+                Agent
               </span>
             </div>
           }
@@ -444,7 +445,7 @@ function ConnectionStep({
       ) : null}
       <div className="mt-6 flex flex-col-reverse gap-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
         <p className="min-w-0 text-xs leading-relaxed text-muted-foreground">
-          {telemetryOff ?? "T3 Code collects anonymous usage data to help us improve it."} To read
+          {telemetryOff ?? "Raven Agent collects anonymous usage data to help us improve it."} To read
           more about how your data is used{telemetryOff === undefined ? " and how to opt out" : ""},
           see our{" "}
           <a
@@ -543,7 +544,7 @@ function ConnectAccountOption({
             </p>
             <CommandBlock command="npx t3 connect" className="mt-3" />
             <p className="mt-3 text-xs text-muted-foreground">
-              Keep T3 Code running. Select the computers you want to set up above.
+              Keep Raven Agent running. Select the computers you want to set up above.
             </p>
           </div>
         </CollapsiblePanel>
@@ -649,7 +650,7 @@ function PairingForm({
           </div>
           <CollapsiblePanel>
             <p className="pt-3 text-sm text-muted-foreground">
-              On the computer with your code, start T3 Code or run{" "}
+              On the computer with your code, start Raven Agent or run{" "}
               <code className="font-mono">npx t3 serve</code>, then run:
             </p>
             <CommandBlock command="npx t3 pair" className="mt-2" />

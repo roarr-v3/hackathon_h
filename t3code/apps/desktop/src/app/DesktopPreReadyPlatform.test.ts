@@ -160,7 +160,7 @@ describe("DesktopPreReadyPlatform", () => {
         const identity = yield* Effect.promise(() => portalIdentity);
         assert.equal(identity.desktopName, "com.t3tools.T3Code.desktop");
         assert.include(identity.desktopEntry ?? "", "Exec=/Applications/current.AppImage %U");
-        assert.include(identity.desktopEntry ?? "", "Name=Raven (Beta)");
+        assert.include(identity.desktopEntry ?? "", "Name=Raven Agent (Beta)");
         assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/t3code;");
         assert.include(
           identity.desktopEntry ?? "",
@@ -184,7 +184,7 @@ describe("DesktopPreReadyPlatform", () => {
               DesktopConfig.layerTest({
                 XDG_DATA_HOME: "/xdg",
                 APPIMAGE: "/Applications/current.AppImage",
-                T3CODE_DESKTOP_LAUNCHER_PATH: " /opt/T3 Code/t3code ",
+                T3CODE_DESKTOP_LAUNCHER_PATH: " /opt/Raven Agent/t3code ",
               }),
             ),
           ),
@@ -192,7 +192,7 @@ describe("DesktopPreReadyPlatform", () => {
         const entry = writeFileSyncMock.mock.calls.find(
           ([path]) => path === "/xdg/applications/com.t3tools.T3Code.desktop",
         )?.[1];
-        assert.include(entry, 'Exec="/opt/T3 Code/t3code" %U');
+        assert.include(entry, 'Exec="/opt/Raven Agent/t3code" %U');
       }),
     ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
   });
