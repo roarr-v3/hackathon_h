@@ -429,13 +429,25 @@ H must rebuild/relaunch using the application's documented setup and execute the
 against the updated app**. If the repaired source/build is unavailable on the target, H must block.
 Raven has no generic automatic deployment path for arbitrary applications.
 
-### Recorded verification limits (not a fresh live pass)
+### Recorded verification and remaining limits
 
-- Recorded checks saw the existing `raven-linux-apple` as running in read-only metadata, but
-  preparation, screenshot capture and direct Cua exec failed: guest `192.168.64.2:3211` was
-  unreachable (`No route to host`). No H request or action occurred.
-  No machines were stopped, deleted, or reprovisioned.
-- Presence checks (no values): `HAI_API_KEY` and `DEVIN_API_KEY` present; `DEVIN_ORG_ID` absent.
-  Browser-panel tools were unavailable; no visual verification was performed.
-- Focused tests: **51 passed**. Earlier broad run: **388 passed**, with a mock failure subsequently
-  fixed. The full final run is still pending; these are recorded results, not rerun by this docs update.
+- A real `models-loop` smoke on the existing `raven-linux-apple` Apple Container Space passed
+  with `holo4-35b-a3b`: run `run_79d4d38e31b0`, agent `agt_b6457cebcdae`, **10.18 seconds** overall.
+  The sequence was request start → H response (3.41 s) → `type_text` and Enter →
+  screenshot showing `RAVEN INPUT OK 2800` → second H response (1.16 s) →
+  explicit `done` verdict → passed agent and run. This bounded check used one attempt,
+  a 150-second QA budget and 45-second request timeouts. The named suite's assertions were preserved.
+- The preceding `holo4-27b` check also typed correctly and captured the confirming screenshot,
+  but its final-verdict requests timed out. It recorded request timing, one retry and an
+  agent error, rather than reporting a user stop or a pass. The successful check above proves
+  the Cua/Models API route; it does not validate H's hosted or local-runtime routes.
+- The existing Space remained running; no machines were stopped, deleted or reprovisioned.
+  Earlier `No route to host` observations were superseded by these live checks.
+- The full Python suite passes with warnings treated as errors. Focused desktop/contracts/sidebar
+  checks passed **15 tests**; the touched packages' typecheck and lint/format checks passed.
+- `DEVIN_ORG_ID` was absent, organization discovery was denied, and the local CLI was logged out
+  during the auth probe. Cloud Linux/Windows VM execution and a fresh authenticated planner turn
+  remain unverified. VM preparation now rejects unauthenticated CLI status even when its exit code is zero.
+- iOS device preparation and the sidebar still need live visual verification. Browser-panel tools
+  were unavailable. Linkup failure-report/repair wiring has automated coverage; the successful
+  smoke did not exercise Linkup.

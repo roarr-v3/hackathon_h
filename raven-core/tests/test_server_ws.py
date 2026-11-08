@@ -6,6 +6,7 @@ import sys
 import time
 from types import SimpleNamespace
 
+import anyio
 from fastapi.testclient import TestClient
 
 from raven_core.server import Raven, create_app
@@ -50,6 +51,14 @@ def wait_until(cond, timeout=5.0):
     raise AssertionError("timeout")
 
 
+def receive_json(ws):
+    async def receive():
+        with anyio.fail_after(5):
+            return await anyio.to_thread.run_sync(ws.receive_json, abandon_on_cancel=True)
+
+    return anyio.run(receive)
+
+
 def test_ring_buffer_keeps_last_200():
     bus = EventBus()
     for i in range(250):
@@ -67,24 +76,26 @@ def test_ws_replay_and_live(tmp_path, monkeypatch):
         assert n >= 5
 
         with client.websocket_connect("/ws/events") as ws:
-            replay = [ws.receive_json() for _ in range(n)]
+            replay = [receive_json(ws) for _ in range(n)]
             assert [e["id"] for e in replay] == [e.id for e in raven.store.bus.recent()[:n]]
             assert replay[0]["type"] == "agent.created"
             assert replay[0]["data"]["agent"]["id"] == a1["id"]
 
             a2 = client.post("/agents", json={"platform": "macos", "task": "two"}).json()
-            live = ws.receive_json()
+            live = receive_json(ws)
             assert live["type"] == "agent.created" and live["agent_id"] == a2["id"]
 
         wait_until(lambda: client.get(f"/agents/{a2['id']}").json()["agent"]["status"] == "passed")
+        wait_until(lambda: any(
+            event.agent_id == a2["id"] and event.type == "agent.status" and event.data.get("status") == "passed"
+            for event in raven.store.bus.recent()
+        ))
+        expected = [event for event in raven.store.bus.recent() if event.agent_id == a2["id"]]
         with client.websocket_connect(f"/ws/events?agent_id={a2['id']}") as ws:
-            first = ws.receive_json()
+            replay = [receive_json(ws) for _ in expected]
+            first = replay[0]
             assert first["agent_id"] == a2["id"] and first["type"] == "agent.created"
-            replay = [first]
-            while not (
-                replay[-1]["type"] == "agent.status"
-                and replay[-1]["data"].get("status") == "passed"
-            ):
-                replay.append(ws.receive_json())
+            assert [event["id"] for event in replay] == [event.id for event in expected]
             assert all(event["agent_id"] == a2["id"] for event in replay)
             assert any(event["type"] == "agent.verdict" for event in replay)
+            assert replay[-1]["type"] == "agent.status" and replay[-1]["data"]["status"] == "passed"
