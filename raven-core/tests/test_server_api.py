@@ -177,6 +177,10 @@ def test_reply_to_finished_agent_continues_in_the_same_thread(client):
     assert r["agent_id"] == agent["id"]
     wait_until(lambda: len(verdicts()) == 3)
     assert detail()["agent"]["platform"] == "macos" and detail()["agent"]["worker"] == "fake-macos"
+    phone = client.post("/agents", json={"platform": "ios", "task": "say hi"}).json()
+    wait_until(lambda: agent_status(client, phone["id"]) == "passed")
+    client.post(f"/agents/{phone['id']}/messages", json={"text": "rebuild the app for sinan's iphone"})
+    wait_until(lambda: client.get(f"/agents/{phone['id']}").json()["agent"]["platform"] == "macos")
 
 
 def test_stop_agent(client):
@@ -323,7 +327,8 @@ def test_stop_run_and_stop_all(client, raven):
     wait_until(lambda: agent_status(client, agent["id"]) == "stopped")
 
 
-def test_voice_command_intents(client):
+def test_voice_command_intents(client, monkeypatch):
+    monkeypatch.setenv("RAVEN_DEFAULT_PLATFORM", "macos")
     r = client.post("/voice/command", json={"text": "run demo interop on linux"}).json()
     assert r["action"] == "run" and r["run"]["platforms"] == ["linux"]
     r = client.post("/voice/command", json={"text": "on linux: wait for my message"}).json()
@@ -335,8 +340,8 @@ def test_voice_command_intents(client):
     wait_until(lambda: agent_status(client, agent_id) == "passed")
     r = client.post("/voice/command", json={"text": "Stop all."}).json()
     assert r["action"] == "stop_all"
-    r = client.post("/voice/command", json={"text": "blorp"}).json()
-    assert r["action"] == "none"
+    r = client.post("/voice/command", json={"text": "open safari for sinan's iphone"}).json()
+    assert r["action"] == "agent" and r["agent"]["platform"] == "macos"
     assert client.post("/voice/command", json={"text": "x", "agent_id": "nope"}).status_code == 404
 
 

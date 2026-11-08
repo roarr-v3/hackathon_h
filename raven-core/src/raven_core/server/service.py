@@ -33,7 +33,7 @@ from raven_core.events import (
     StopCause,
 )
 from raven_core.execution import ExecutionProfiles
-from raven_core.placement import describe_host, requested
+from raven_core.placement import default_platform, describe_host, requested
 from raven_core.server.config import Settings
 from raven_core.server.intents import HELP, follow_up_task, parse_command, task_platforms
 from raven_core.store import (
@@ -396,8 +396,9 @@ class Raven:
             return None
         plats = task_platforms(text)
         task = follow_up_task(text, agent.original_task or agent.task)
+        platform = agent.platform if agent.platform != Platform.ios else default_platform()
         req = CreateAgentRequest(
-            platform=plats[0] if len(plats) == 1 else agent.platform, task=task, placement=requested(text),
+            platform=plats[0] if len(plats) == 1 else platform, task=task, placement=requested(text),
             model=agent.execution.model if agent.execution else None, repo_path=agent.repo_path,
         )
         execution = self.execution_profiles.snapshot(None, model=req.model)
@@ -1300,10 +1301,11 @@ class Raven:
             return {"action": "message", "agent_id": running[0].id, "delivered": target is not None,
                     "detail": f"Sent to {running[0].platform.value} agent"}
         plats = task_platforms(text)
-        if len(plats) == 1:
-            agent = self.start_agent(CreateAgentRequest(platform=plats[0], task=text, placement=requested(text)))
+        if len(plats) <= 1 and text.strip():
+            platform = plats[0] if plats else default_platform()
+            agent = self.start_agent(CreateAgentRequest(platform=platform, task=text, placement=requested(text)))
             return {"action": "agent", "agent": agent.model_dump(mode="json"),
-                    "detail": f"Started {plats[0].value} agent"}
+                    "detail": f"Started {platform.value} agent"}
         return {"action": "none", "detail": "Sorry, I didn't understand. " + HELP}
 
     async def shutdown(self) -> None:

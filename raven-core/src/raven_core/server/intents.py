@@ -78,7 +78,9 @@ def parse_platforms(text: str) -> list[Platform]:
 
 
 def task_platforms(text: str) -> list[Platform]:
-    return [Platform.macos] if _MAC_APP_RE.search(text or "") else parse_platforms(text)
+    if _MAC_APP_RE.search(text or ""):
+        return [Platform.macos]
+    return [p for p in parse_platforms(text) if p != Platform.ios]
 
 
 def follow_up_task(text: str, earlier: str) -> str:

@@ -29,6 +29,10 @@ def host_platform() -> Platform | None:
     return {"darwin": Platform.macos, "linux": Platform.linux, "win32": Platform.windows}.get(sys.platform)
 
 
+def default_platform() -> Platform:
+    return Platform(os.environ.get("RAVEN_DEFAULT_PLATFORM") or (host_platform() or Platform.linux).value)
+
+
 def host_arch() -> str:
     return _platform.machine() or "unknown"
 

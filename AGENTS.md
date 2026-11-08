@@ -77,7 +77,9 @@ pairing token. `/health` is unauthenticated.
 - `GET  /agents/{id}` → `{"agent": Agent, "events": Event[]}`
 - `POST /agents/{id}/messages` `SendMessageRequest` (steer a running agent; a reply to a finished free-form
   agent resumes that same agent and thread, with the earlier task as context) → `{ok, delivered, agent_id}`.
-  Free-form prompts naming Xcode or Device Hub run on macOS (those are Mac apps), even if they mention an iPhone.
+  Free-form prompts (Raven Agent, iPhone home/thread composer, voice) never pick iOS just because they mention
+  an iPhone: they run on the Mac (default platform), and prompts naming Xcode or Device Hub always do.
+  Only an explicit `on ios: …` targets the iOS Device Hub worker.
 - `POST /agents/{id}/stop`
 - `GET/POST /agents/{id}/approvals/{approval_id}` — inspect a pending local repair operation,
   then submit `{"option_id": "<offered allow_once ID>"}` or `{"option_id": null}` to deny.
