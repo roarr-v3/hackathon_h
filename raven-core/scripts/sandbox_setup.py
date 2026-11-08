@@ -13,16 +13,14 @@ import asyncio
 import os
 import sys
 import time
-from pathlib import Path
 
 from raven_core.engine.holo import load_env
+from raven_core.env import artifacts_dir
 from raven_core.events import Agent, Event, Platform
 from raven_core.workers.cua import _patch_cua_embedded
 
 _patch_cua_embedded()
 
-ROOT = Path(__file__).resolve().parents[1]
-ART = ROOT / "artifacts"
 LINUX = os.environ.get("RAVEN_LINUX_SANDBOX", "raven-linux")
 MAC = os.environ.get("RAVEN_MACOS_SANDBOX", "raven-mac")
 
@@ -127,8 +125,9 @@ async def shot(platform: str) -> None:
 
     w = get_worker(Platform(platform))
     png = await w.screenshot()
-    ART.mkdir(exist_ok=True)
-    p = ART / f"spike-{platform}.png"
+    artifacts = artifacts_dir()
+    artifacts.mkdir(exist_ok=True)
+    p = artifacts / f"spike-{platform}.png"
     p.write_bytes(png)
     print("wrote", p, len(png), "bytes")
 
@@ -142,7 +141,16 @@ async def smoke(platform: str) -> None:
     async def emit(e: Event) -> None:
         print(e.type, {k: v for k, v in e.data.items()})
 
-    await run_agent(agent, get_worker(Platform(platform)), emit, asyncio.Queue(), asyncio.Event(), ART, timeout_s=300, max_steps=20)
+    await run_agent(
+        agent,
+        get_worker(Platform(platform)),
+        emit,
+        asyncio.Queue(),
+        asyncio.Event(),
+        artifacts_dir(),
+        timeout_s=300,
+        max_steps=20,
+    )
     print("RESULT", agent.status, agent.verdict_reason)
 
 

@@ -23,6 +23,12 @@ class Platform(StrEnum):
     ios = "ios"
 
 
+class Placement(StrEnum):
+    auto = "auto"
+    bare_metal = "bare-metal"
+    vm = "vm"
+
+
 class AgentStatus(StrEnum):
     queued = "queued"
     running = "running"
@@ -51,6 +57,7 @@ class Agent(BaseModel):
     created_at: float = Field(default_factory=time.time)
     last_screenshot: str | None = None
     verdict_reason: str | None = None
+    placement: Placement | None = None
 
 
 class Run(BaseModel):
@@ -101,6 +108,7 @@ class CreateAgentRequest(BaseModel):
     platform: Platform
     task: str
     title: str | None = None
+    placement: Placement = Placement.auto
 
 
 class SendMessageRequest(BaseModel):
@@ -110,6 +118,7 @@ class SendMessageRequest(BaseModel):
 class CreateRunRequest(BaseModel):
     spec: str
     platforms: list[Platform] | None = None
+    placement: Placement = Placement.auto
 
 
 class VoiceSession(BaseModel):

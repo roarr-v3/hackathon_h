@@ -88,4 +88,12 @@ export const make = ElectronShell.of({
   }),
 });
 
+export const openPath = (path: string): Effect.Effect<boolean> =>
+  Effect.promise(() =>
+    Electron.shell.openPath(path).then(
+      (message) => message.length === 0,
+      () => false,
+    ),
+  );
+
 export const layer = Layer.succeed(ElectronShell, make);

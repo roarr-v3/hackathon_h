@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from raven_core.env import load_env
 from raven_core.events import Agent, AgentStatus, Event
 from raven_core.workers.base import Worker, png_size
 
@@ -33,41 +34,6 @@ SETTLE_S = float(os.environ.get("RAVEN_SETTLE_S", "0.8"))
 
 Emit = Callable[[Event], Awaitable[None]]
 
-# ---------------------------------------------------------------- env
-
-
-_env_loaded = False
-
-
-def load_env() -> None:
-    """Load repo-root .env into os.environ (no override, never logged)."""
-    global _env_loaded
-    if _env_loaded:
-        return
-    _env_loaded = True
-    candidates = [Path.cwd(), *Path.cwd().parents, *Path(__file__).resolve().parents]
-    seen: set[Path] = set()
-    for d in candidates:
-        f = d / ".env"
-        if f in seen:
-            continue
-        seen.add(f)
-        if f.is_file():
-            try:
-                for line in f.read_text().splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, v = line.split("=", 1)
-                    k = k.strip().removeprefix("export ").strip()
-                    v = v.strip().strip('"').strip("'")
-                    if k and v and k not in os.environ:
-                        os.environ[k] = v
-            except OSError:
-                pass
-            return
-
-
 def make_client() -> Any:
     """AsyncOpenAI client for the H Models API."""
     load_env()
@@ -75,7 +41,7 @@ def make_client() -> Any:
 
     key = os.environ.get("HAI_API_KEY")
     if not key:
-        raise RuntimeError("HAI_API_KEY is not set (put it in the repo-root .env)")
+        raise RuntimeError("HAI_API_KEY is not set (Raven Agent Settings, or .env for development)")
     return AsyncOpenAI(
         base_url=os.environ.get("HAI_BASE_URL", DEFAULT_BASE_URL),
         api_key=key,

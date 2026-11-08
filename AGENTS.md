@@ -45,8 +45,11 @@ a driver backend under H's agent. Cua never makes decisions.
 - `docs/hackathon/` sponsor PDFs (reference only).
 
 ## raven-core API (default `http://localhost:8787`)
-Auth: if `RAVEN_TOKEN` is set, require `Authorization: Bearer <token>` (WS: `?token=`).
+The desktop sidecar binds `0.0.0.0`. Remote requests require `Authorization: Bearer <token>`
+(WS: `?token=`); local requests are trusted. The token is `RAVEN_TOKEN` or a generated, persisted
+pairing token. `/health` is unauthenticated.
 - `GET  /health` → `{"ok": true}`
+- `GET  /pairing` → token and reachable URLs (loopback only)
 - `GET  /agents` → `Agent[]` · `POST /agents` `CreateAgentRequest` → `Agent`
 - `GET  /agents/{id}` → `{"agent": Agent, "events": Event[]}`
 - `POST /agents/{id}/messages` `SendMessageRequest` (steer a running agent / voice command)
@@ -62,13 +65,24 @@ Auth: if `RAVEN_TOKEN` is set, require `Authorization: Bearer <token>` (WS: `?to
 ## Worker interface (Python Protocol, `workers/base.py`)
 `screenshot() -> bytes(PNG)`, `size() -> (w,h)`, `click(x,y,button="left")`,
 `double_click(x,y)`, `type_text(text)`, `key(combo)`, `scroll(x,y,dx,dy)`,
-`shell(cmd) -> (rc, stdout, stderr)`. Implementations: Cua sandboxes (macOS Lume VM,
-Linux Docker container) and remote cua-spacesd (Windows PC over Tailscale).
+`shell(cmd) -> (rc, stdout, stderr)`. Implementations include this Mac, Cua sandboxes
+(macOS Lume VM, Linux Docker container), and remote cua-spacesd (Windows PC over Tailscale).
 
 ## Everyday use
-`bin/raven` (symlinked to `~/.local/bin/raven`, wrapped as `~/Applications/Raven Agent.app`) starts
-raven-core and Raven Agent. The ACP bridge also starts a detached raven-core daemon on `initialize`.
-`raven_core/machines.py` creates/resumes Cua sandboxes on demand (and colima) and suspends idle ones.
+`bin/raven` (symlinked to `~/.local/bin/raven`, wrapped as `~/Applications/Raven Agent.app`) opens or
+rebuilds Raven Agent, reports status, and stops it. Raven Agent owns a raven-core sidecar: packaged
+launches run `uv sync --frozen` when needed, then `raven-core serve`; it probes `/health`, restarts
+failed children with backoff, and stops its child on quit. An already healthy server is left external.
+The managed ACP bridge waits for the app's server; standalone ACP clients can start a detached local
+daemon unless `RAVEN_ACP_DAEMON=0` (or `RAVEN_ACP_SERVE=0`).
+
+On this Mac, macOS runs default to bare metal: grant Screen Recording and Accessibility; one agent
+uses the screen at a time, Raven hides its window, and models-loop shows an agent pointer. Ask for a
+VM or set `RAVEN_PLACEMENT=vm` for a macOS VM. On this host Linux uses a Cua container, Windows
+uses the home PC, and iOS uses the Mac's Simulator. Cua sandbox runs try to open a live viewer by default.
+`raven_core/machines.py` creates/resumes sandboxes on demand (and colima) and suspends idle ones.
+`raven_core/env.py` is the single env loader: `RAVEN_DATA_DIR` selects data/artifact defaults,
+`RAVEN_SPECS_DIR` overrides specs, and `RAVEN_ENV_FILE` overrides the env file.
 Full manual steps: `TESTING.md`.
 
 ## Commands
@@ -84,4 +98,8 @@ Full manual steps: `TESTING.md`.
 - iOS: open `ios/RavenMobile/RavenMobile.xcodeproj` (Xcode 27).
 
 ## Secrets
-Keys live in `.env` at repo root (see `.env.example`). Never commit or log them.
+Set keys in Raven Agent → Settings → Raven. Electron `safeStorage` encrypts them using macOS
+Keychain-backed encryption in `<userData>/raven/secrets.bin`; non-secret settings live in
+`<userData>/raven/raven.env` (normally `~/Library/Application Support/raven-agent/raven/raven.env`
+on macOS). Repo-root `.env` remains the terminal/dev fallback (see `.env.example`). Never commit
+or log keys.

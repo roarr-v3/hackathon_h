@@ -14,7 +14,8 @@ import difflib
 import re
 from dataclasses import dataclass, field
 
-from raven_core.events import Platform
+from raven_core.events import Placement, Platform
+from raven_core.placement import requested
 
 _PLATFORM_RE = re.compile(
     r"\b(mac\s?os|os\s?x|macbook|mac|linux|ubuntu|debian|windows|win(?:dows)?\s?11|win|ios|iphone|ipad)\b",
@@ -37,6 +38,11 @@ _ALIAS = {
     "ipad": Platform.ios,
 }
 _PLAT_WORD = r"(?:mac\s?os|os\s?x|mac|linux|ubuntu|windows|win|ios|iphone)"
+_PLACEMENT_PREFIX_RE = re.compile(
+    r"^(?:(?:in|on|inside|using)\s+(?:an?\s+|the\s+)?(?:vm|virtual\s+machine|sandbox|container)"
+    r"|bare[\s-]?metal|(?:on\s+)?this\s+(?:mac|machine|computer))\s*[:,\-]?\s*",
+    re.I,
+)
 
 
 @dataclass
@@ -47,6 +53,7 @@ class Intent:
     platforms: list[Platform] | None = None
     platform: Platform | None = None
     task: str | None = None
+    placement: Placement = Placement.auto
     notes: list[str] = field(default_factory=list)
 
 
@@ -117,7 +124,7 @@ def parse_command(text: str, spec_names: list[str]) -> Intent:
             spec = match_spec(rest, spec_names)
         if spec is not None:
             plats = parse_platforms(plat_part) if plat_part else []
-            return Intent("run", text=raw, spec=spec, platforms=plats or None)
+            return Intent("run", text=raw, spec=spec, platforms=plats or None, placement=requested(raw))
 
     agent_patterns = [
         rf"(?:please\s+)?(?:start|spawn|launch|open|create|new)\s+(?:an?\s+|the\s+)?(?P<plat>{_PLAT_WORD})\s+agent\b\s*(?:to|that|and|which|:|,|-)?\s*(?P<task>.+)$",
@@ -129,9 +136,9 @@ def parse_command(text: str, spec_names: list[str]) -> Intent:
         m = re.match(pat, t, re.I | re.S)
         if m:
             p = _alias(m.group("plat"))
-            task = m.group("task").strip()
+            task = _PLACEMENT_PREFIX_RE.sub("", m.group("task").strip()).strip()
             if p is not None and task:
-                return Intent("agent", text=raw, platform=p, task=task)
+                return Intent("agent", text=raw, platform=p, task=task, placement=requested(raw))
 
     return Intent("unknown", text=raw)
 
@@ -141,4 +148,5 @@ HELP = """**Raven commands**
 - `on <platform>: <task>` — start one computer-use agent (e.g. `on linux: open a terminal and run uname -a`)
 - `stop` — stop all running agents
 - `specs` — list test suites · `status` — list agents
+- Tests run on this machine when it is the same OS (bare metal); add `in a vm` to use a VM instead (you can watch it live)
 Anything else is sent to the running agent (or starts one on the default platform)."""

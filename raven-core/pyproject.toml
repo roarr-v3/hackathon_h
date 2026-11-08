@@ -12,7 +12,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "uvicorn[standard]>=0.54.0",
     "cua-sandbox>=0.9.1; python_version < '3.14'",
-    "hai-agents[cli]>=1.4.3",
+    "hai-agents[cli,desktop]>=1.4.3",
 ]
 
 [dependency-groups]
@@ -22,6 +22,9 @@ dev = [
 
 [project.scripts]
 raven-core = "raven_core:main"
+
+[tool.uv]
+constraint-dependencies = ["hai-drivers<0.1.17", "soupsieve<4"]
 
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]

@@ -21,6 +21,7 @@ struct RavenMobileApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
+                .onOpenURL { url in Task { await store.pair(with: url) } }
                 .preferredColorScheme(.dark)
                 .background(Color.black.ignoresSafeArea())
         }

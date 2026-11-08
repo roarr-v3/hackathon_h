@@ -5,8 +5,8 @@ host script with stdin/stdout pipes, (3) read back screenshot files it wrote.
 Selection per platform comes from env (later raven.yaml):
   RAVEN_HOST_LINUX   cua-local (default) | devin-cloud
   RAVEN_HOST_MACOS   cua-local (default) | devin-cloud
-  RAVEN_HOST_IOS     mac-simulator (default) | devin-cloud
   RAVEN_HOST_WINDOWS home-pc
+Bare-metal runs (the target OS is this machine's; iOS in the Simulator on a Mac) use `LocalHost`.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class Host:
             await self.prepare()
         env = {k: os.environ[k] for k in PASS_ENV if os.environ.get(k)}
         if "HAI_API_KEY" not in env:
-            raise WorkerUnavailable("HAI_API_KEY is not set (.env at repo root)")
+            raise WorkerUnavailable("HAI_API_KEY is not set (Raven Agent Settings, or .env for development)")
         argv = self._spawn_argv(host_args, env)
         return await asyncio.create_subprocess_exec(
             *argv,
@@ -120,9 +120,31 @@ class DockerHost(Host):
 
 
 class LocalHost(Host):
-    """This Mac (e.g. driving the iOS Simulator). H's agent takes over this screen."""
+    """This machine, bare metal (macOS, or the iOS Simulator on a Mac). H's agent takes over this screen."""
 
-    kind = "mac-simulator"
+    kind = "bare-metal"
+    bare_metal = True
+
+    def __init__(self, platform: Platform, name: str | None = None):
+        super().__init__(platform, name or ("this-mac" if sys.platform == "darwin" else "this-machine"))
+        self._hidden: list = []
+
+    async def begin(self) -> None:
+        if sys.platform == "darwin":
+            from raven_core.workers.local_mac import hide_raven_window
+
+            self._hidden = await asyncio.to_thread(hide_raven_window)
+
+    async def finish(self) -> None:
+        apps, self._hidden = self._hidden, []
+        for app in apps:
+            await asyncio.to_thread(app.unhide)
+
+    async def preflight(self) -> None:
+        if sys.platform == "darwin":
+            from raven_core.workers.local_mac import check_mac_permissions
+
+            await asyncio.to_thread(check_mac_permissions)
 
     def _spawn_argv(self, host_args: list[str], env: dict[str, str]) -> list[str]:
         return [sys.executable, str(HOST_SCRIPT), *host_args]
@@ -130,14 +152,17 @@ class LocalHost(Host):
     async def read_file(self, path: str) -> bytes:
         return Path(path).read_bytes()
 
+    async def shell(self, cmd: str, timeout: int = 60) -> tuple[int, str, str]:
+        from raven_core.machines import local_shell
+
+        return await local_shell(cmd, timeout)
+
 
 def get_host(platform: Platform) -> Host:
     platform = Platform(platform)
     choice = os.environ.get(f"RAVEN_HOST_{platform.value.upper()}", "").strip()
     if platform == Platform.linux and choice in ("", "cua-local"):
         return DockerHost(platform, os.environ.get("RAVEN_LINUX_SANDBOX", "raven-linux"))
-    if platform == Platform.ios and choice in ("", "mac-simulator"):
-        return LocalHost(platform, "this-mac")
     raise WorkerUnavailable(
         f"host '{choice or 'default'}' for {platform.value} is not implemented yet "
         f"(set RAVEN_H_MODE=models-loop to use the Holo4 loop through Cua)"

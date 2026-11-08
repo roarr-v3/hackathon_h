@@ -29,6 +29,8 @@ import httpx
 
 from raven_core.acp.backend import HttpBackend, LocalBackend, agent_terminal
 from raven_core.acp.jsonrpc import Connection, MethodNotFound, RpcError
+from raven_core.events import Placement
+from raven_core.placement import host_platform, requested
 from raven_core.server.intents import HELP, parse_command, parse_platforms
 
 def raven_url() -> str:
@@ -57,20 +59,21 @@ async def ensure_daemon(url: str, wait_s: float = 20.0) -> bool:
     import subprocess
     import sys
 
+    from raven_core import env
+    from raven_core.env import REPO_ROOT
     from raven_core.machines import tool_env
-    from raven_core.server.config import REPO_ROOT
 
     parsed = urlparse(url)
     if parsed.hostname not in ("localhost", "127.0.0.1", None):
         return False  # remote server: not ours to start
-    logs = REPO_ROOT / "artifacts" / "logs"
+    logs = env.logs_dir()
     logs.mkdir(parents=True, exist_ok=True)
-    host = "0.0.0.0" if os.environ.get("RAVEN_TOKEN") else "127.0.0.1"
+    host = "0.0.0.0"
     cmd = [sys.executable, "-m", "raven_core", "serve", "--host", host, "--port", str(parsed.port or 8787)]
     with open(logs / "raven-core.log", "ab") as log_file:
         subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
-            cwd=str(REPO_ROOT), env=tool_env(), start_new_session=True,
+            cwd=str(env.data_dir() or REPO_ROOT), env=tool_env(), start_new_session=True,
         )
     log.info("started raven-core daemon: %s", " ".join(cmd))
     deadline = asyncio.get_running_loop().time() + wait_s
@@ -81,8 +84,19 @@ async def ensure_daemon(url: str, wait_s: float = 20.0) -> bool:
     return False
 
 
-CLIENT_INSTRUCTIONS_RE = re.compile(r"<([a-z0-9_]+_instructions|runtime_info)>.*?</\1>", re.S | re.I)
+CLIENT_INSTRUCTIONS_RE = re.compile(
+    r"<([a-z0-9_]+_instructions|runtime_info|pull_request_linking|t3_context|environment_context)>.*?</\1>",
+    re.S | re.I,
+)
 USER_REQUEST_RE = re.compile(r"<user_request>(.*?)</user_request>", re.S | re.I)
+RETRY_RE = re.compile(r"(?:please\s+)?(?:retry|try again|again|re-?run(?: it)?|run it again|one more time)[.!]*", re.I)
+EARLIER_TASK = "\n\n(Earlier task in this conversation: "
+HANDOFF_USER_MESSAGE = "\nUser message:\n"
+
+
+def default_platform() -> str:
+    host = host_platform()
+    return os.environ.get("RAVEN_DEFAULT_PLATFORM") or (host.value if host else "linux")
 
 log = logging.getLogger("raven.acp")
 
@@ -167,6 +181,7 @@ class Session:
     cancel: asyncio.Event | None = None
     agent_ids: list[str] = field(default_factory=list)
     run_ids: list[str] = field(default_factory=list)
+    last: tuple[str, str, str] | None = None
 
 
 class Renderer:
@@ -361,6 +376,23 @@ class RavenAcpAgent:
     async def _connect(self) -> Any:
         url = raven_url()
         token = os.environ.get("RAVEN_TOKEN") or None
+        if os.environ.get("RAVEN_ACP_MANAGED") == "1":
+            try:
+                wait_s = max(0.0, float(os.environ.get("RAVEN_ACP_WAIT_S") or 180))
+            except ValueError:
+                wait_s = 180.0
+            deadline = asyncio.get_running_loop().time() + wait_s
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if await _healthy(url, timeout=min(1.0, max(remaining, 0.1))):
+                    log.info("using app-managed raven-core at %s", url)
+                    return HttpBackend(url, token)
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise RuntimeError(
+                        "raven-core is not running — open Settings → Raven in Raven Agent"
+                    )
+                await asyncio.sleep(min(0.5, remaining))
         if await _healthy(url) or await ensure_daemon(url):
             log.info("using raven-core at %s", url)
             return HttpBackend(url, token)
@@ -419,6 +451,8 @@ class RavenAcpAgent:
             return {}
         if method == "session/new":
             return self.new_session(params)
+        if method == "session/resume":
+            return self.resume_session(params)
         if method == "session/prompt":
             return await self.prompt(params)
         if method == "session/cancel":
@@ -452,14 +486,16 @@ class RavenAcpAgent:
     def initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         self.client_info = params.get("clientInfo") or {}
         # Raven Agent probes providers at startup: use that to bring raven-core up in the background.
-        task = asyncio.get_running_loop().create_task(ensure_daemon(raven_url()))
-        self._daemon_task = task
+        if os.environ.get("RAVEN_ACP_MANAGED") != "1":
+            task = asyncio.get_running_loop().create_task(ensure_daemon(raven_url()))
+            self._daemon_task = task
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
                 "loadSession": False,
                 "promptCapabilities": {"image": False, "audio": False, "embeddedContext": False},
                 "mcpCapabilities": {"http": False, "sse": False},
+                "sessionCapabilities": {"resume": {}, "close": {}},
             },
             "agentInfo": {"name": "raven", "title": "Raven", "version": "0.1.0"},
             "authMethods": [],
@@ -469,16 +505,24 @@ class RavenAcpAgent:
     def _models(self, current: str) -> dict[str, Any]:
         return {"currentModelId": current, "availableModels": MODELS}
 
-    def new_session(self, params: dict[str, Any]) -> dict[str, Any]:
-        sid = f"raven-{uuid.uuid4().hex[:12]}"
-        s = Session(id=sid, cwd=str(params.get("cwd") or ""))
+    def _open_session(self, sid: str, cwd: str) -> Session:
+        s = self.sessions.get(sid) or Session(id=sid, cwd=cwd)
         self.sessions[sid] = s
-        loop = asyncio.get_running_loop()
-        loop.call_later(
+        asyncio.get_running_loop().call_later(
             0.05,
             lambda: self.update(sid, {"sessionUpdate": "available_commands_update", "availableCommands": COMMANDS}),
         )
-        return {"sessionId": sid, "models": self._models(s.model)}
+        return s
+
+    def new_session(self, params: dict[str, Any]) -> dict[str, Any]:
+        s = self._open_session(f"raven-{uuid.uuid4().hex[:12]}", str(params.get("cwd") or ""))
+        return {"sessionId": s.id, "models": self._models(s.model)}
+
+    def resume_session(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Threads outlive this process (app restarts); Raven keeps no history, so resuming reopens the id."""
+        sid = str(params.get("sessionId") or "") or f"raven-{uuid.uuid4().hex[:12]}"
+        s = self._open_session(sid, str(params.get("cwd") or ""))
+        return {"models": self._models(s.model)}
 
     def cancel(self, params: dict[str, Any]) -> None:
         s = self.sessions.get(str(params.get("sessionId") or ""))
@@ -502,7 +546,10 @@ class RavenAcpAgent:
         # Clients such as t3code wrap the message in their own instruction blocks; they are not the task.
         if m := USER_REQUEST_RE.search(text):
             return m.group(1).strip()
-        return CLIENT_INSTRUCTIONS_RE.sub("", text).strip()
+        text = CLIENT_INSTRUCTIONS_RE.sub("", text).strip()
+        if text.startswith("Context handoff (") and HANDOFF_USER_MESSAGE in text:
+            return text.rsplit(HANDOFF_USER_MESSAGE, 1)[1].strip()
+        return text
 
     async def prompt(self, params: dict[str, Any]) -> dict[str, Any]:
         s = self._session(params)
@@ -549,20 +596,34 @@ class RavenAcpAgent:
             return "end_turn"
         if intent.kind == "run" and intent.spec:
             plats = [p.value for p in intent.platforms] if intent.platforms else None
-            run = await b.create_run(intent.spec, plats, model=s.model)
+            run = await b.create_run(intent.spec, plats, model=s.model, placement=intent.placement.value)
             s.run_ids.append(run["id"])
             self._say(s, f"🧪 Running **{run['spec']}** on {', '.join(run['platforms'])} (`{run['id']}`)\n\n")
             return await self._follow(s, run_id=run["id"])
 
-        if intent.kind == "agent" and intent.platform and intent.task:
-            platform, task = intent.platform.value, intent.task
-        else:
-            plats = parse_platforms(text)
-            platform = plats[0].value if len(plats) == 1 else (os.environ.get("RAVEN_DEFAULT_PLATFORM") or "linux")
-            task = text
-        agent = await b.create_agent(platform, task, model=s.model)
+        platform, task, placement = self.agent_request(s, text, intent)
+        s.last = (platform, task, placement)
+        agent = await b.create_agent(platform, task, model=s.model, placement=placement)
         s.agent_ids.append(agent["id"])
         return await self._follow(s, agent_id=agent["id"])
+
+    @staticmethod
+    def agent_request(s: Session, text: str, intent: Any) -> tuple[str, str, str]:
+        """(platform, task, placement) for a prompt; "retry" repeats, follow-ups stay on the same machine."""
+        wanted = requested(text)
+        if intent.kind == "agent" and intent.platform and intent.task:
+            return intent.platform.value, intent.task, wanted.value
+        if s.last and RETRY_RE.fullmatch(text.strip()):
+            return s.last
+        plats = parse_platforms(text)
+        if len(plats) == 1:
+            return plats[0].value, text, wanted.value
+        if s.last:
+            platform, earlier, placement = s.last
+            if EARLIER_TASK in earlier:
+                earlier = earlier.split(EARLIER_TASK, 1)[1].removesuffix(")")
+            return platform, f"{text}{EARLIER_TASK}{earlier})", wanted.value if wanted != Placement.auto else placement
+        return default_platform(), text, wanted.value
 
     async def _follow(self, s: Session, run_id: str | None = None, agent_id: str | None = None) -> str:
         b = await self.backend()

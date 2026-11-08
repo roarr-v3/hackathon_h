@@ -15,10 +15,10 @@ const devBundleIdSuffix = NodePath.basename(repoRoot)
   .replaceAll(/[^a-z0-9]+/g, "");
 const APP_DISPLAY_NAME = isDevelopment ? "Raven Agent (Dev)" : "Raven Agent";
 const APP_BUNDLE_ID = isDevelopment
-  ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
-  : "com.t3tools.t3code";
+  ? `app.raven.agent.dev.${devBundleIdSuffix || "local"}`
+  : "app.raven.agent";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 20;
+const LAUNCHER_VERSION = 21;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
@@ -132,10 +132,17 @@ export function makeDevelopmentLauncherScript({
   mainEntryPath,
   desktopRoot,
   environmentFilePath,
+  fallbackAppPath,
 }) {
+  const environmentFile = shellSingleQuote(environmentFilePath);
   return [
     "#!/bin/sh",
-    `if [ -f ${shellSingleQuote(environmentFilePath)} ]; then . ${shellSingleQuote(environmentFilePath)}; fi`,
+    ...(fallbackAppPath
+      ? [
+          `if [ -f ${environmentFile} ] && ! cat ${environmentFile} >/dev/null 2>&1 && [ -d ${shellSingleQuote(fallbackAppPath)} ]; then exec /usr/bin/open -a ${shellSingleQuote(fallbackAppPath)}; fi`,
+        ]
+      : []),
+    `if [ -f ${environmentFile} ]; then . ${environmentFile}; fi`,
     `exec ${shellSingleQuote(electronBinaryPath)} --t3code-dev-root=${shellSingleQuote(desktopRoot)} ${shellSingleQuote(mainEntryPath)} "$@"`,
     "",
   ].join("\n");
@@ -161,6 +168,7 @@ export function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryP
     mainEntryPath: NodePath.join(desktopDir, "dist-electron", "main.cjs"),
     desktopRoot: desktopDir,
     environmentFilePath: developmentEnvironmentFilePath,
+    fallbackAppPath: NodePath.join(NodeOS.homedir(), "Applications", `${APP_DISPLAY_NAME}.app`),
   });
   if (
     NodeFS.existsSync(targetBinaryPath) &&
@@ -269,8 +277,10 @@ function resolveMacBundleInfoPlistStrings(executableName) {
     CFBundleIconFile: "icon.icns",
     NSScreenCaptureUsageDescription:
       "Raven Agent captures the active window when you use the snapshot shortcut.",
-    NSDocumentsFolderUsageDescription: "Raven Agent reads project files you open in the desktop app.",
-    NSMicrophoneUsageDescription: "Raven Agent uses the microphone for voice input in the composer.",
+    NSDocumentsFolderUsageDescription:
+      "Raven Agent reads project files you open in the desktop app.",
+    NSMicrophoneUsageDescription:
+      "Raven Agent uses the microphone for voice input in the composer.",
   };
 }
 
@@ -348,9 +358,7 @@ function buildMacLauncher(electronBinaryPath) {
   const targetAppBundlePath = NodePath.join(runtimeDir, `${APP_DISPLAY_NAME}.app`);
   const developmentPaths = resolveMacLauncherPaths(targetAppBundlePath);
   const runtimeElectronBinaryPath = developmentPaths.runtimeElectronBinaryPath;
-  const launcherBinaryPath = isDevelopment
-    ? developmentPaths.launcherBinaryPath
-    : runtimeElectronBinaryPath;
+  const launcherBinaryPath = developmentPaths.launcherBinaryPath;
   const iconPath = ensureMacIconIcns(runtimeDir);
   const metadataPath = NodePath.join(runtimeDir, "metadata.json");
 
@@ -368,16 +376,14 @@ function buildMacLauncher(electronBinaryPath) {
   const currentMetadata = readJson(metadataPath);
   if (
     NodeFS.existsSync(launcherBinaryPath) &&
-    (!isDevelopment || NodeFS.existsSync(runtimeElectronBinaryPath)) &&
+    NodeFS.existsSync(runtimeElectronBinaryPath) &&
     currentMetadata &&
     JSON.stringify(currentMetadata) === JSON.stringify(expectedMetadata)
   ) {
-    if (isDevelopment) {
-      // Protocol activations bypass the dev runner, so refresh the fallback environment on every launch.
-      writeDevelopmentEnvironmentScript();
-      if (writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath)) {
-        signMacLauncherBundle(targetAppBundlePath);
-      }
+    // Protocol activations bypass the dev runner, so refresh the fallback environment on every launch.
+    writeDevelopmentEnvironmentScript();
+    if (writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath)) {
+      signMacLauncherBundle(targetAppBundlePath);
     }
     registerMacLauncherBundle(targetAppBundlePath);
     return launcherBinaryPath;
@@ -389,17 +395,11 @@ function buildMacLauncher(electronBinaryPath) {
     recursive: true,
     verbatimSymlinks: true,
   });
-  patchMainBundleInfoPlist(
-    targetAppBundlePath,
-    iconPath,
-    isDevelopment ? developmentPaths.launcherExecutableName : "Electron",
-  );
+  patchMainBundleInfoPlist(targetAppBundlePath, iconPath, developmentPaths.launcherExecutableName);
   patchHelperBundleInfoPlists(targetAppBundlePath);
-  if (isDevelopment) {
-    // Electron.app's executable name keeps default-app mode active without making app.isPackaged true.
-    writeDevelopmentEnvironmentScript();
-    writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath);
-  }
+  // Electron.app's executable name keeps default-app mode active without making app.isPackaged true.
+  writeDevelopmentEnvironmentScript();
+  writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath);
   signMacLauncherBundle(targetAppBundlePath);
   NodeFS.writeFileSync(metadataPath, `${JSON.stringify(expectedMetadata, null, 2)}\n`);
   registerMacLauncherBundle(targetAppBundlePath);

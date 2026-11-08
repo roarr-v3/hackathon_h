@@ -9,7 +9,7 @@ import shlex
 import time
 from typing import Awaitable, Callable
 
-from raven_core.events import Agent, AgentStatus, CreateAgentRequest, Event, Platform, Run, RunStatus
+from raven_core.events import Agent, AgentStatus, CreateAgentRequest, Event, Placement, Platform, Run, RunStatus
 from raven_core.specs import Spec, SpecAgent
 from raven_core.workers import get_worker
 
@@ -49,8 +49,8 @@ def launch_command(platform: Platform, cmd: str) -> tuple[str, bool]:
     return cmd, False
 
 
-async def setup_platform(platform: Platform, cmds: list[str]) -> None:
-    worker = get_worker(platform)
+async def setup_platform(platform: Platform, cmds: list[str], placement: Placement = Placement.auto) -> None:
+    worker = get_worker(platform, placement=placement)
     for raw in cmds:
         cmd, background = launch_command(platform, raw)
         try:
@@ -63,7 +63,7 @@ async def setup_platform(platform: Platform, cmds: list[str]) -> None:
             await asyncio.sleep(2)  # let the window appear before the agent's first screenshot
 
 
-def agent_request(spec: Spec, a: SpecAgent) -> CreateAgentRequest:
+def agent_request(spec: Spec, a: SpecAgent, placement: Placement = Placement.auto) -> CreateAgentRequest:
     others = [x.platform.value for x in spec.agents if x is not a]
     context = ""
     if others:
@@ -77,7 +77,7 @@ def agent_request(spec: Spec, a: SpecAgent) -> CreateAgentRequest:
         title = f"{a.platform.value} · {a.role}"
     else:
         title = f"{spec.name} on {a.platform.value}"
-    return CreateAgentRequest(platform=a.platform, task=a.task.strip() + context, title=title)
+    return CreateAgentRequest(platform=a.platform, task=a.task.strip() + context, title=title, placement=placement)
 
 
 async def run_spec(
@@ -88,6 +88,7 @@ async def run_spec(
     *,
     emit: Callable[[Event], Awaitable[None]] | None = None,
     stop_agent: Callable[[str], Awaitable[None]] | None = None,
+    placement: Placement = Placement.auto,
     poll_s: float = 1.0,
     grace_s: float = 60.0,
 ) -> None:
@@ -114,7 +115,7 @@ async def run_spec(
     try:
         # 1. setup apps on every selected platform, concurrently
         await asyncio.gather(
-            *(setup_platform(p, spec.setup[p]) for p in {a.platform for a in chosen} if spec.setup.get(p)),
+            *(setup_platform(p, spec.setup[p], placement) for p in {a.platform for a in chosen} if spec.setup.get(p)),
             return_exceptions=True,
         )
 
@@ -130,7 +131,7 @@ async def run_spec(
                 await asyncio.sleep(delay)
             if run.status == RunStatus.stopped:
                 return
-            agent = await start_agent(agent_request(spec, a), run.id)
+            agent = await start_agent(agent_request(spec, a, placement), run.id)
             agents.append(agent)
             if agent.id not in run.agent_ids:
                 run.agent_ids.append(agent.id)

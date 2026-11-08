@@ -339,6 +339,70 @@ export const DesktopCliCommandStateSchema = Schema.Struct({
 });
 export type DesktopCliCommandState = typeof DesktopCliCommandStateSchema.Type;
 
+export const DesktopRavenCoreStatusSchema = Schema.Struct({
+  state: Schema.Literals(["setting-up", "starting", "ready", "external", "stopped"]),
+  message: Schema.optionalKey(Schema.String),
+  logPath: Schema.String,
+  url: Schema.String,
+});
+export type DesktopRavenCoreStatus = typeof DesktopRavenCoreStatusSchema.Type;
+
+export const DesktopRavenKeyNameSchema = Schema.Literals([
+  "HAI_API_KEY",
+  "GLADIA_API_KEY",
+  "LINKUP_API_KEY",
+  "DEVIN_API_KEY",
+]);
+export type DesktopRavenKeyName = typeof DesktopRavenKeyNameSchema.Type;
+
+export const DesktopRavenSettingsStateSchema = Schema.Struct({
+  keys: Schema.Struct({
+    HAI_API_KEY: Schema.Struct({ set: Schema.Boolean, last4: Schema.NullOr(Schema.String) }),
+    GLADIA_API_KEY: Schema.Struct({ set: Schema.Boolean, last4: Schema.NullOr(Schema.String) }),
+    LINKUP_API_KEY: Schema.Struct({ set: Schema.Boolean, last4: Schema.NullOr(Schema.String) }),
+    DEVIN_API_KEY: Schema.Struct({ set: Schema.Boolean, last4: Schema.NullOr(Schema.String) }),
+  }),
+  settings: Schema.Struct({
+    hMode: Schema.NullOr(Schema.String),
+    model: Schema.NullOr(Schema.String),
+    idleSuspendMin: Schema.NullOr(Schema.Number),
+  }),
+  status: DesktopRavenCoreStatusSchema,
+  pairing: Schema.NullOr(
+    Schema.Struct({ token: Schema.String, urls: Schema.Array(Schema.String) }),
+  ),
+});
+export type DesktopRavenSettingsState = typeof DesktopRavenSettingsStateSchema.Type;
+
+export const DesktopRavenSettingsSaveInputSchema = Schema.Struct({
+  keys: Schema.optionalKey(
+    Schema.Struct({
+      HAI_API_KEY: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      GLADIA_API_KEY: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      LINKUP_API_KEY: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      DEVIN_API_KEY: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    }),
+  ),
+  settings: Schema.optionalKey(
+    Schema.Struct({
+      hMode: Schema.optionalKey(
+        Schema.NullOr(Schema.Literals(["local-runtime", "agents-api", "models-loop"])),
+      ),
+      model: Schema.optionalKey(Schema.NullOr(Schema.Literals(["holo4-27b", "holo4-35b-a3b"]))),
+      idleSuspendMin: Schema.optionalKey(
+        Schema.NullOr(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+      ),
+    }),
+  ),
+});
+export type DesktopRavenSettingsSaveInput = typeof DesktopRavenSettingsSaveInputSchema.Type;
+
+export const DesktopRavenKeyTestResultSchema = Schema.Struct({
+  ok: Schema.Boolean,
+  message: Schema.String,
+});
+export type DesktopRavenKeyTestResult = typeof DesktopRavenKeyTestResultSchema.Type;
+
 export interface DesktopUpdateActionResult {
   accepted: boolean;
   completed: boolean;
@@ -1140,6 +1204,13 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopCliCommandState>;
     install: () => Promise<DesktopCliCommandState>;
     uninstall: () => Promise<DesktopCliCommandState>;
+  };
+  raven: {
+    getState: () => Promise<DesktopRavenSettingsState>;
+    save: (input: DesktopRavenSettingsSaveInput) => Promise<DesktopRavenSettingsState>;
+    testKey: (name: DesktopRavenKeyName, value?: string) => Promise<DesktopRavenKeyTestResult>;
+    restart: () => Promise<DesktopRavenSettingsState>;
+    openLog: () => Promise<boolean>;
   };
   webLinks: {
     setReady: (ready: boolean) => Promise<void>;

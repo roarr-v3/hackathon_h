@@ -12,6 +12,7 @@ import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
@@ -19,6 +20,8 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import * as RavenCoreSidecar from "../raven/RavenCoreSidecar.ts";
+import * as DesktopAppIdentity from "../app/DesktopAppIdentity.ts";
 import * as DesktopCliShim from "../app/DesktopCliShim.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
@@ -80,6 +83,7 @@ const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_DESKTOP_HTTPS_ENDPOINTS",
   "T3CODE_TAILSCALE_SERVE",
   "T3CODE_TAILSCALE_SERVE_PORT",
+  "ACP_BACKEND",
 ] as const;
 
 // Windows forwards these variables into WSL only through WSLENV.
@@ -241,6 +245,7 @@ interface SharedBootstrapInput {
   readonly bootstrapToken: string;
   readonly bootstrapSecret: string;
   readonly observabilitySettings: BackendObservabilitySettings;
+  readonly ravenCoreEnv: Readonly<Record<string, string | undefined>>;
 }
 
 type WslPreflightRuntime =
@@ -536,6 +541,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ELECTRON_RUN_AS_NODE: "1",
         T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
         T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
+        ...input.ravenCoreEnv,
       },
       extendEnv: true,
       bootstrap,
@@ -720,8 +726,11 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
 /** @public */
 export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const appIdentity = yield* DesktopAppIdentity.DesktopAppIdentity;
   const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const processEnv = yield* HostProcess.Environment;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
@@ -753,10 +762,31 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
+    const ravenCoreLaunch = yield* RavenCoreSidecar.resolveRavenCoreLaunchEffect(processEnv).pipe(
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+      Effect.provideService(DesktopAppIdentity.DesktopAppIdentity, appIdentity),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.orElseSucceed(() => undefined),
+    );
+    const ravenCoreEnv = {
+      RAVEN_ACP_DAEMON: "0",
+      RAVEN_ACP_MANAGED: "1",
+      RAVEN_URL: ravenCoreLaunch?.url ?? RavenCoreSidecar.ravenCoreUrl(processEnv),
+      ...(ravenCoreLaunch?.mode === "packaged"
+        ? {
+            RAVEN_CORE_COMMAND: ravenCoreLaunch.serve.command,
+            RAVEN_DATA_DIR: ravenCoreLaunch.dataDir,
+            RAVEN_SPECS_DIR: ravenCoreLaunch.serve.env.RAVEN_SPECS_DIR,
+            RAVEN_ENV_FILE: ravenCoreLaunch.serve.env.RAVEN_ENV_FILE,
+          }
+        : {}),
+    };
     return {
       bootstrapToken,
       bootstrapSecret,
       observabilitySettings,
+      ravenCoreEnv,
     } satisfies SharedBootstrapInput;
   });
 

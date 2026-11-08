@@ -70,6 +70,7 @@ import {
 import * as PreviewIpc from "./methods/preview.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import * as WebLinksIpc from "./methods/webLinks.ts";
+import * as RavenIpc from "./methods/raven.ts";
 import {
   completeLegacyLocalStorage,
   takeLegacyLocalStorage,
@@ -160,6 +161,11 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getCliCommandState);
   yield* ipc.handle(installCliCommand);
   yield* ipc.handle(uninstallCliCommand);
+  yield* ipc.handle(RavenIpc.getRavenSettingsState);
+  yield* ipc.handle(RavenIpc.saveRavenSettings);
+  yield* ipc.handle(RavenIpc.testRavenKey);
+  yield* ipc.handle(RavenIpc.restartRavenCore);
+  yield* ipc.handle(RavenIpc.openRavenCoreLog);
   for (const previewMethod of PreviewIpc.methods) {
     // Explicit types preserve the error/service union of these heterogeneous preview methods.
     yield* ipc.handle<

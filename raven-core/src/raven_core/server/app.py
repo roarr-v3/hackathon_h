@@ -22,6 +22,7 @@ from raven_core.events import (
     SendMessageRequest,
     VoiceSession,
 )
+from raven_core.server.pairing import is_local, pairing_urls
 from raven_core.server.service import NotFound, Raven
 from raven_core.server.voice import VoiceError, create_voice_session
 
@@ -66,6 +67,8 @@ def create_app(raven: Raven | None = None) -> FastAPI:
     )
 
     async def auth(request: Request) -> None:
+        if is_local(request.client.host if request.client else None):
+            return
         if not _token_ok(settings.token, request.headers.get("authorization"), request.query_params.get("token")):
             raise HTTPException(status_code=401, detail="unauthorized")
 
@@ -80,6 +83,12 @@ def create_app(raven: Raven | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {"ok": True}
+
+    @app.get("/pairing")
+    async def pairing(request: Request) -> dict[str, Any]:
+        if not is_local(request.client.host if request.client else None):
+            raise HTTPException(status_code=403, detail="pairing details are only served to this machine")
+        return {"token": settings.token, "urls": await asyncio.to_thread(pairing_urls, settings.port)}
 
     # ---------------------------------------------------------------- agents
     @app.get("/agents", dependencies=A, response_model=list[Agent])
@@ -169,7 +178,8 @@ def create_app(raven: Raven | None = None) -> FastAPI:
     # ---------------------------------------------------------------- websocket
     @app.websocket("/ws/events")
     async def ws_events(ws: WebSocket) -> None:
-        if not _token_ok(settings.token, ws.headers.get("authorization"), ws.query_params.get("token")):
+        local = is_local(ws.client.host if ws.client else None)
+        if not local and not _token_ok(settings.token, ws.headers.get("authorization"), ws.query_params.get("token")):
             await ws.close(code=1008)
             return
         run_f = ws.query_params.get("run_id")

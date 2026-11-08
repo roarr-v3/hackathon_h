@@ -12,7 +12,9 @@ NodeChildProcess.execFileSync(
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
 
-const electronCommand = resolveElectronLaunchCommand(["dist-electron/main.cjs"]);
+const electronCommand = resolveElectronLaunchCommand(
+  process.platform === "darwin" ? [] : ["dist-electron/main.cjs"],
+);
 const child = NodeChildProcess.spawn(electronCommand.electronPath, electronCommand.args, {
   stdio: "inherit",
   cwd: desktopDir,

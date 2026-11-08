@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from raven_core.events import CreateAgentRequest, CreateRunRequest, Platform
+from raven_core.events import CreateAgentRequest, CreateRunRequest, Placement, Platform
 from raven_core.store import TERMINAL_AGENT
 
 
@@ -38,11 +38,16 @@ class HttpBackend:
     async def list_agents(self) -> list[dict[str, Any]]:
         return await self._json("GET", "/agents")
 
-    async def create_run(self, spec: str, platforms: list[str] | None, model: str | None = None) -> dict[str, Any]:
-        return await self._json("POST", "/runs", json={"spec": spec, "platforms": platforms})
+    async def create_run(
+        self, spec: str, platforms: list[str] | None, model: str | None = None, placement: str = "auto"
+    ) -> dict[str, Any]:
+        return await self._json("POST", "/runs", json={"spec": spec, "platforms": platforms, "placement": placement})
 
-    async def create_agent(self, platform: str, task: str, title: str | None = None, model: str | None = None) -> dict[str, Any]:
-        return await self._json("POST", "/agents", json={"platform": platform, "task": task, "title": title})
+    async def create_agent(
+        self, platform: str, task: str, title: str | None = None, model: str | None = None, placement: str = "auto"
+    ) -> dict[str, Any]:
+        body = {"platform": platform, "task": task, "title": title, "placement": placement}
+        return await self._json("POST", "/agents", json=body)
 
     async def send_message(self, agent_id: str, text: str) -> None:
         await self._json("POST", f"/agents/{agent_id}/messages", json={"text": text})
@@ -99,14 +104,19 @@ class LocalBackend:
     async def list_agents(self) -> list[dict[str, Any]]:
         return [a.model_dump(mode="json") for a in self.raven.store.agents.values()]
 
-    async def create_run(self, spec: str, platforms: list[str] | None, model: str | None = None) -> dict[str, Any]:
+    async def create_run(
+        self, spec: str, platforms: list[str] | None, model: str | None = None, placement: str = "auto"
+    ) -> dict[str, Any]:
         self._model(model)
         plats = [Platform(p) for p in platforms] if platforms else None
-        return self.raven.create_run(CreateRunRequest(spec=spec, platforms=plats)).model_dump(mode="json")
+        req = CreateRunRequest(spec=spec, platforms=plats, placement=Placement(placement))
+        return self.raven.create_run(req).model_dump(mode="json")
 
-    async def create_agent(self, platform: str, task: str, title: str | None = None, model: str | None = None) -> dict[str, Any]:
+    async def create_agent(
+        self, platform: str, task: str, title: str | None = None, model: str | None = None, placement: str = "auto"
+    ) -> dict[str, Any]:
         self._model(model)
-        req = CreateAgentRequest(platform=Platform(platform), task=task, title=title)
+        req = CreateAgentRequest(platform=Platform(platform), task=task, title=title, placement=Placement(placement))
         return self.raven.start_agent(req).model_dump(mode="json")
 
     async def send_message(self, agent_id: str, text: str) -> None:

@@ -13,6 +13,7 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
+import * as DesktopAppIdentity from "../app/DesktopAppIdentity.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopManagedPolicy from "../app/DesktopManagedPolicy.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
@@ -31,7 +32,15 @@ const layerShellEnvironment = (prepared = true) =>
   });
 
 const layerBackendConfiguration = (prepared = true) =>
-  DesktopBackendConfiguration.layer.pipe(Layer.provide(layerShellEnvironment(prepared)));
+  DesktopBackendConfiguration.layer.pipe(
+    Layer.provide(layerShellEnvironment(prepared)),
+    Layer.provideMerge(
+      Layer.succeed(DesktopAppIdentity.DesktopAppIdentity, {
+        resolveUserDataPath: Effect.succeed("/tmp/raven-core-sidecar-test"),
+        configure: Effect.void,
+      }),
+    ),
+  );
 
 const layerServerExposure = Layer.succeed(DesktopServerExposure.DesktopServerExposure, {
   getState: Effect.die("unexpected getState"),
@@ -237,6 +246,20 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.captureOutput, true);
         assert.equal(first.env.ELECTRON_RUN_AS_NODE, "1");
         assert.equal(first.env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING, "1");
+        assert.equal(first.env.RAVEN_ACP_DAEMON, "0");
+        assert.equal(first.env.RAVEN_ACP_MANAGED, "1");
+        assert.isTrue("ACP_BACKEND" in first.env && first.env.ACP_BACKEND === undefined);
+        assert.match(first.env.RAVEN_URL ?? "", /^http:\/\/127\.0\.0\.1:\d+$/);
+        assert.equal(
+          first.env.RAVEN_CORE_COMMAND,
+          "/tmp/raven-core-sidecar-test/raven/venv/bin/raven-core",
+        );
+        assert.equal(first.env.RAVEN_DATA_DIR, "/tmp/raven-core-sidecar-test/raven");
+        assert.equal(first.env.RAVEN_SPECS_DIR, "/missing/resources/raven/specs");
+        assert.equal(
+          first.env.RAVEN_ENV_FILE,
+          "/tmp/raven-core-sidecar-test/raven/raven.env",
+        );
         assert.isUndefined(first.env.T3CODE_PORT);
         assert.isUndefined(first.env.T3CODE_MODE);
         assert.isUndefined(first.env.T3CODE_DESKTOP_LAN_HOST);

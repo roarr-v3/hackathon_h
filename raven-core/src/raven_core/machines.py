@@ -1,8 +1,9 @@
-"""Test machines on demand: start what a test needs, suspend what nobody uses.
+"""Test machines on demand: start what a test needs, show it, suspend what nobody uses.
 
 Cua sandboxes (Lume macOS VM, Docker Linux container) are created on first use, resumed when
 suspended, and suspended again after RAVEN_IDLE_SUSPEND_MIN minutes without agents (0 = never).
-Docker itself (colima) is started when the Linux machine needs it.
+Docker itself (colima) is started when the Linux machine needs it. While an agent uses one,
+`show()` opens Cua's live, watch-only viewer of its desktop (RAVEN_SHOW_VM=0 turns that off).
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ import json
 import logging
 import os
 import shutil
+import sys
 import time
+import webbrowser
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -28,8 +31,11 @@ SANDBOXES = {
 }
 EXTRA_PATH = ["/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / ".local" / "bin")]
 
+VIEW_TTL_S = 8 * 3600
+
 _locks: dict[Platform, asyncio.Lock] = {}
 _last_used: dict[Platform, float] = {}
+_shown: dict[str, float] = {}
 
 
 def tool_env() -> dict[str, str]:
@@ -40,7 +46,10 @@ def tool_env() -> dict[str, str]:
 
 
 def _which(name: str) -> str:
-    found = shutil.which(name, path=tool_env()["PATH"])
+    """Tools from the system, never raven-core's own venv (hai-drivers ships a stub `cua` there)."""
+    venv_bin = Path(sys.prefix) / "bin"
+    dirs = [d for d in [*EXTRA_PATH, *tool_env()["PATH"].split(":")] if d and Path(d) != venv_bin]
+    found = shutil.which(name, path=":".join(dirs))
     if not found:
         raise WorkerUnavailable(f"`{name}` not found (install it, see TESTING.md)")
     return found
@@ -107,6 +116,51 @@ async def ensure(platform: Platform, say: Say | None = None) -> None:
             rc, out = await _run(_which("cua"), "sb", "resume", name, timeout=300)
             if rc:
                 raise WorkerUnavailable(f"resuming {name} failed: {out[-400:]}")
+
+
+def _show_enabled() -> bool:
+    return os.environ.get("RAVEN_SHOW_VM", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+async def show(platform: Platform, say: Say | None = None) -> str | None:
+    """Open a live, watch-only view of the machine for `platform`; once per link lifetime."""
+    platform = Platform(platform)
+    if platform not in SANDBOXES or not _show_enabled():
+        return None
+    name = SANDBOXES[platform][0]()
+    if time.time() - _shown.get(name, 0.0) < VIEW_TTL_S - 300:
+        return None
+    rc, out = await _run(
+        _which("cua"), "--json", "sb", "view", name, "--view-only", "--no-open", "--ttl", f"{VIEW_TTL_S // 3600}h",
+        timeout=60,
+    )
+    if rc:
+        raise WorkerUnavailable(f"cua sb view {name} failed: {out[-300:]}")
+    try:
+        url = str(json.loads(out[out.find("{") :])["url"])
+    except (ValueError, KeyError, TypeError) as e:
+        raise WorkerUnavailable(f"cua sb view {name} printed no viewer link") from e
+    _shown[name] = time.time()
+    await asyncio.to_thread(webbrowser.open, url)
+    log.info("opened the live view of %s", name)
+    if say:
+        await say(f"Watching `{name}` live (view only): {url}")
+    return url
+
+
+async def local_shell(cmd: str, timeout: float = 60) -> tuple[int, str, str]:
+    """Run `cmd` on this machine (bare-metal setup commands), with the GUI-safe PATH."""
+    proc = await asyncio.create_subprocess_exec(
+        "/bin/bash", "-lc", cmd,
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env=tool_env(),
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except (TimeoutError, asyncio.TimeoutError):
+        proc.kill()
+        return 124, "", f"timed out after {timeout:.0f}s"
+    return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
 
 
 def touch(platform: Platform) -> None:

@@ -9,7 +9,7 @@ const IDLE_STATE: VoiceInputState = { phase: "idle", error: null, errorAction: n
 const FINAL_TRANSCRIPT_TIMEOUT_MS = 5_000;
 
 /** raven-core mints the Gladia live session, so the Gladia key never reaches the client. */
-export function ravenUrl(): string {
+function ravenUrl(): string {
   const override = globalThis.localStorage?.getItem("raven:url")?.trim();
   return (override || import.meta.env.VITE_RAVEN_URL?.trim() || "http://localhost:8787").replace(
     /\/+$/,

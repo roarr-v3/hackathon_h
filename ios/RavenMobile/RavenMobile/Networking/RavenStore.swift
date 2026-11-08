@@ -24,7 +24,7 @@ final class RavenStore {
     var token: String = "" {
         didSet { Keychain.set(token, for: Keys.token) }
     }
-    var demoMode: Bool = true {
+    var demoMode: Bool = false {
         didSet { UserDefaults.standard.set(demoMode, forKey: Keys.demo) }
     }
 
@@ -51,7 +51,7 @@ final class RavenStore {
         let defaults = UserDefaults.standard
         serverURL = defaults.string(forKey: Keys.server) ?? "http://localhost:8787"
         token = Keychain.get(Keys.token) ?? ""
-        demoMode = defaults.object(forKey: Keys.demo) as? Bool ?? true
+        demoMode = defaults.object(forKey: Keys.demo) as? Bool ?? false
         // Launch arguments for screenshots / CI: `-demo YES|NO`, `-server http://...`
         if defaults.object(forKey: "demo") != nil { demoMode = defaults.bool(forKey: "demo") }
         if let forcedServer = defaults.string(forKey: "server") { serverURL = forcedServer }
@@ -79,6 +79,41 @@ final class RavenStore {
         guard !started else { return }
         started = true
         connect()
+    }
+
+    @discardableResult
+    func pair(with link: URL) async -> String? {
+        guard link.scheme == "raven",
+              let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems else { return nil }
+        let token = items.first { $0.name == "token" }?.value ?? ""
+        let candidates = items.filter { $0.name == "url" }.compactMap(\.value)
+        var reachable: String?
+        for candidate in candidates {
+            if let api = APIClient(server: candidate, token: token), await Self.answers(api) {
+                reachable = candidate
+                break
+            }
+        }
+        if let chosen = reachable ?? candidates.first {
+            serverURL = chosen
+            self.token = token
+            demoMode = false
+            reconnect()
+        }
+        return reachable
+    }
+
+    private static func answers(_ api: APIClient) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { (try? await api.health()) ?? false }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
     }
 
     /// Tear down and reconnect with the current settings.
@@ -110,6 +145,11 @@ final class RavenStore {
         connection = .connecting
         socket.connect(to: wsURL)
         Task { await refresh() }
+        #if !targetEnvironment(simulator)
+        if ["localhost", "127.0.0.1"].contains(api.baseURL.host ?? "") {
+            flash("Not paired: scan the QR in Raven Agent → Settings → Raven")
+        }
+        #endif
     }
 
     func refresh() async {

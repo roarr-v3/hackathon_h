@@ -277,7 +277,7 @@ export type NotificationMode = typeof NotificationMode.Type;
 
 export const QuitConfirmationMode = Schema.Literals(["direct", "hold", "double-click"]);
 export type QuitConfirmationMode = typeof QuitConfirmationMode.Type;
-const DEFAULT_QUIT_CONFIRMATION_MODE: QuitConfirmationMode = "hold";
+const DEFAULT_QUIT_CONFIRMATION_MODE: QuitConfirmationMode = "direct";
 
 const LegacyConfirmQuit = Schema.Boolean.pipe(
   Schema.decodeTo(

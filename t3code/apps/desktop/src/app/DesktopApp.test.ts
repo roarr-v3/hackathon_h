@@ -12,6 +12,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({}));
@@ -49,6 +50,8 @@ import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
+import * as RavenCoreSidecar from "../raven/RavenCoreSidecar.ts";
+import * as RavenSettings from "../raven/RavenSettings.ts";
 
 import * as BrowserImport from "../preview/BrowserImport/BrowserImport.ts";
 import * as DesktopBackendConfiguration from "../backend/DesktopBackendConfiguration.ts";
@@ -85,12 +88,36 @@ it.effect.each([false, true])(
       const releaseHistory = yield* Deferred.make<void>();
       const quitting = yield* Ref.make(false);
       const events: string[] = [];
+      const ravenStatus = yield* SubscriptionRef.make<RavenCoreSidecar.RavenCoreStatus>({
+        state: "stopped",
+        logPath: "/tmp/raven-core.log",
+        url: "http://127.0.0.1:8787",
+      });
       const record = (event: string) =>
         Effect.sync(() => {
           events.push(event);
         });
       const runApp = DesktopApp.program
         .pipe(
+          Effect.provideService(
+            RavenCoreSidecar.RavenCoreSidecar,
+            RavenCoreSidecar.RavenCoreSidecar.of({
+              status: ravenStatus,
+              start: Effect.void,
+              restart: Effect.void,
+              stop: Effect.void,
+            }),
+          ),
+          Effect.provideService(
+            RavenSettings.RavenSettings,
+            RavenSettings.RavenSettings.of({
+              get: Effect.die("unexpected Raven settings read"),
+              save: () => Effect.die("unexpected Raven settings save"),
+              testKey: () => Effect.die("unexpected Raven key test"),
+              restart: Effect.die("unexpected Raven restart"),
+              ravenCoreEnv: Effect.succeed({}),
+            }),
+          ),
           Effect.provide(NodeCrypto.layer),
           Effect.provideService(DesktopAppIdentity.DesktopAppIdentity, {
             resolveUserDataPath: Effect.succeed("/isolated/userdata"),

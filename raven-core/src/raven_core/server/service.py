@@ -11,6 +11,7 @@ import inspect
 import logging
 import random
 import re
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,10 +23,12 @@ from raven_core.events import (
     CreateAgentRequest,
     CreateRunRequest,
     Event,
+    Placement,
     Platform,
     Run,
     RunStatus,
 )
+from raven_core.placement import describe_host, requested
 from raven_core.server.config import Settings
 from raven_core.server.intents import HELP, parse_command, parse_platforms
 from raven_core.store import (
@@ -76,6 +79,24 @@ def _is_fake(w: Any) -> bool:
     from raven_core.workers.fake import FakeWorker
 
     return isinstance(w, FakeWorker) or type(w).__name__.startswith("Fake")
+
+
+def _is_bare_metal(w: Any) -> bool:
+    return bool(getattr(w, "bare_metal", False))
+
+
+def _placement_of(w: Any) -> Placement | None:
+    if w is None or _is_fake(w):
+        return None
+    return Placement.bare_metal if _is_bare_metal(w) else Placement.vm
+
+
+def _accepts(fn: Callable[..., Any], name: str) -> bool:
+    try:
+        params = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == name or p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
 
 
 def _worker_name(w: Any, platform: Platform) -> str:
@@ -142,6 +163,7 @@ class Raven:
         self._run_tasks: dict[str, asyncio.Task[Any]] = {}
         self._stopped_runs: set[str] = set()
         self._bg: set[asyncio.Task[Any]] = set()
+        self._screen_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ engine resolution
     def _get_worker_fn(self) -> Callable[..., Any]:
@@ -275,7 +297,11 @@ class Raven:
         error: Exception | None = None
         worker_name = req.platform.value
         try:
-            w = self._get_worker_fn()(req.platform)
+            get_worker = self._get_worker_fn()
+            if _accepts(get_worker, "placement"):
+                w = get_worker(req.platform, placement=req.placement)
+            else:
+                w = get_worker(req.platform)
             if inspect.isawaitable(w):
                 pending = w
             else:
@@ -289,6 +315,7 @@ class Raven:
             worker=worker_name,
             title=req.title or _title_from_task(req.task),
             task=req.task,
+            placement=_placement_of(worker),
         )
         self.store.add_agent(agent)
         self.emit(Event(type="agent.created", agent_id=agent.id, run_id=run_id, data={"agent": agent.model_dump(mode="json")}))
@@ -315,8 +342,10 @@ class Raven:
                 try:
                     worker = await pending
                     agent.worker = _worker_name(worker, agent.platform)
+                    agent.placement = _placement_of(worker)
                 except Exception as e:
                     error = e
+            bare_metal = error is None and _is_bare_metal(worker)
             if error is None and not _is_fake(worker):
                 from raven_core import machines
 
@@ -324,26 +353,54 @@ class Raven:
                     self._sysmsg(agent, text)
 
                 try:
-                    await machines.ensure(agent.platform, say)
+                    if bare_metal:
+                        preflight = getattr(worker, "preflight", None)
+                        if preflight is not None:
+                            await preflight()
+                    else:
+                        await machines.ensure(agent.platform, say)
                 except Exception as e:  # noqa: BLE001 - surfaced to the user as a worker error
                     error = e
+                if error is None and not bare_metal:
+                    try:
+                        await machines.show(agent.platform, say)
+                    except Exception as e:  # noqa: BLE001 - the test runs anyway, just unseen
+                        self._sysmsg(agent, f"Couldn't open the live view of the {agent.platform.value} machine: {e}")
             if error is not None:
                 self._sysmsg(agent, f"Worker unavailable for {agent.platform.value}: {type(error).__name__}: {error}")
                 agent.verdict_reason = f"worker unavailable: {error}"
                 final = AgentStatus.error
                 return
-            self._status(agent, AgentStatus.running)
-            run_agent = self._run_agent_fn()
-            res = run_agent(
-                agent,
-                worker,
-                self.make_emit(agent),
-                handle.inbox,
-                handle.stop,
-                self.settings.artifacts_dir,
-            )
-            if inspect.isawaitable(res):
-                await res
+            if bare_metal:
+                if self._screen_lock.locked():
+                    self._sysmsg(agent, f"Waiting for {describe_host()}: another agent is using its screen…")
+                await self._screen_lock.acquire()
+            try:
+                if bare_metal:
+                    self._sysmsg(
+                        agent,
+                        f"Running on {describe_host()}, bare metal: Raven controls the mouse and keyboard "
+                        "until this agent finishes. Press Stop to take them back.",
+                    )
+                    await self._call_optional(worker, "begin")
+                self._status(agent, AgentStatus.running)
+                run_agent = self._run_agent_fn()
+                res = run_agent(
+                    agent,
+                    worker,
+                    self.make_emit(agent),
+                    handle.inbox,
+                    handle.stop,
+                    self.settings.artifacts_dir,
+                )
+                if inspect.isawaitable(res):
+                    await res
+            finally:
+                if bare_metal:
+                    try:
+                        await asyncio.shield(self._call_optional(worker, "finish"))
+                    finally:
+                        self._screen_lock.release()
             if agent.status in (AgentStatus.passed, AgentStatus.failed):
                 final = agent.status
             elif handle.stop.is_set():
@@ -370,6 +427,16 @@ class Raven:
         finally:
             if final is not None:
                 self._status(agent, final)
+
+    @staticmethod
+    async def _call_optional(worker: Any, method: str) -> None:
+        fn = getattr(worker, method, None)
+        if fn is None:
+            return
+        try:
+            await fn()
+        except Exception:  # noqa: BLE001 - cosmetics (pointer, hiding Raven) never fail the agent
+            log.exception("%r.%s failed", worker, method)
 
     def get_agent(self, agent_id: str) -> Agent:
         a = self.store.agents.get(agent_id)
@@ -411,6 +478,12 @@ class Raven:
         task = asyncio.get_running_loop().create_task(machines.idle_reaper(self.platform_busy), name="idle-reaper")
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
+        if sys.platform == "darwin":
+            from raven_core.workers.local_mac import log_permission_state
+
+            check = asyncio.get_running_loop().create_task(asyncio.to_thread(log_permission_state), name="mac-permissions")
+            self._bg.add(check)
+            check.add_done_callback(self._bg.discard)
 
     def stop_all(self) -> list[str]:
         ids = [a.id for a in self.active_agents()]
@@ -447,7 +520,9 @@ class Raven:
         run = Run(spec=name, platforms=platforms)
         self.store.add_run(run)
         self.emit(Event(type="run.created", run_id=run.id, data={"run": run.model_dump(mode="json")}))
-        task = asyncio.get_running_loop().create_task(self._run_task(run, spec, platforms), name=f"run-{run.id}")
+        task = asyncio.get_running_loop().create_task(
+            self._run_task(run, spec, platforms, req.placement), name=f"run-{run.id}"
+        )
         self._run_tasks[run.id] = task
         return run
 
@@ -469,7 +544,9 @@ class Raven:
         except NotFound:
             pass
 
-    async def _run_task(self, run: Run, spec: Any, platforms: list[Platform]) -> None:
+    async def _run_task(
+        self, run: Run, spec: Any, platforms: list[Platform], placement: Placement = Placement.auto
+    ) -> None:
         self._set_run_status(run, RunStatus.running)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.settings.run_timeout_s
@@ -485,11 +562,13 @@ class Raven:
                     kwargs["emit"] = self._emit_async
                 if "stop_agent" in params:
                     kwargs["stop_agent"] = self._stop_agent_async
+                if "placement" in params:
+                    kwargs["placement"] = placement
                 res = run_spec(spec, platforms, self.start_agent, run, **kwargs)
                 if inspect.isawaitable(res):
                     await asyncio.wait_for(res, timeout=self.settings.run_timeout_s)
             else:
-                self._fallback_run_spec(spec, platforms, run)
+                self._fallback_run_spec(spec, platforms, run, placement)
             await self._wait_agents(run.id, max(1.0, deadline - loop.time()))
         except (TimeoutError, asyncio.TimeoutError):
             log.warning("run %s timed out", run.id)
@@ -548,7 +627,9 @@ class Raven:
             return RunStatus.stopped
         return RunStatus.failed
 
-    def _fallback_run_spec(self, spec: Any, platforms: list[Platform], run: Run) -> None:
+    def _fallback_run_spec(
+        self, spec: Any, platforms: list[Platform], run: Run, placement: Placement = Placement.auto
+    ) -> None:
         d = _spec_dict(spec)
         vars_: dict[str, str] = {}
         for k, v in (d.get("vars") or {}).items():
@@ -568,6 +649,7 @@ class Raven:
                     platform=p,
                     task=render(str(a.get("task") or "")).strip(),
                     title=f"{d.get('name', run.spec)} · {p.value} {role}".strip(),
+                    placement=placement,
                 ),
                 run.id,
             )
@@ -594,7 +676,9 @@ class Raven:
                     "detail": f"Sent to agent {agent_id}"}
         intent = parse_command(text, self.spec_names())
         if intent.kind == "run":
-            run = self.create_run(CreateRunRequest(spec=intent.spec or "", platforms=intent.platforms))
+            run = self.create_run(
+                CreateRunRequest(spec=intent.spec or "", platforms=intent.platforms, placement=intent.placement)
+            )
             plats = ", ".join(p.value for p in run.platforms)
             return {"action": "run", "run": run.model_dump(mode="json"),
                     "detail": f"Running {run.spec} on {plats}"}
@@ -602,7 +686,9 @@ class Raven:
             ids = self.stop_all()
             return {"action": "stop_all", "stopped": ids, "detail": f"Stopping {len(ids)} agent(s)"}
         if intent.kind == "agent" and intent.platform and intent.task:
-            agent = self.start_agent(CreateAgentRequest(platform=intent.platform, task=intent.task))
+            agent = self.start_agent(
+                CreateAgentRequest(platform=intent.platform, task=intent.task, placement=intent.placement)
+            )
             return {"action": "agent", "agent": agent.model_dump(mode="json"),
                     "detail": f"Started {intent.platform.value} agent: {agent.title}"}
         if intent.kind == "list":
@@ -620,7 +706,7 @@ class Raven:
                     "detail": f"Sent to {running[0].platform.value} agent"}
         plats = parse_platforms(text)
         if len(plats) == 1:
-            agent = self.start_agent(CreateAgentRequest(platform=plats[0], task=text))
+            agent = self.start_agent(CreateAgentRequest(platform=plats[0], task=text, placement=requested(text)))
             return {"action": "agent", "agent": agent.model_dump(mode="json"),
                     "detail": f"Started {plats[0].value} agent"}
         return {"action": "none", "detail": "Sorry, I didn't understand. " + HELP}

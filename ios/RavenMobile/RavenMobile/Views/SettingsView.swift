@@ -144,6 +144,8 @@ struct SettingsView: View {
             server = store.serverURL
             token = store.token
         }
+        .onChange(of: store.serverURL) { _, value in server = value }
+        .onChange(of: store.token) { _, value in token = value }
     }
 
     private var appVersion: String {

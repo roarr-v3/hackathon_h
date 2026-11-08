@@ -20,6 +20,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/diagnostics"
   | "/settings/voice"
+  | "/settings/raven"
   | "/settings/appearance"
   | "/settings/chat"
   | "/settings/diffs"
@@ -109,6 +110,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/labs": "Labs",
   "/settings/about": "About",
   "/settings/voice": "Voice",
+  "/settings/raven": "Raven",
   "/settings/archived": "Archive",
 };
 
@@ -126,6 +128,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
       "/settings/diffs",
       "/settings/keybindings",
       "/settings/voice",
+      "/settings/raven",
       "/settings/snap-shot",
     ],
   },
@@ -594,6 +597,60 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Test model",
     to: "/settings/voice",
     searchTerms: ["test voice speech model transcription recognition"],
+  },
+  {
+    id: "raven-core-status",
+    title: "Raven core status",
+    to: "/settings/raven",
+    searchTerms: ["raven core server sidecar ready starting stopped external retry log"],
+  },
+  {
+    id: "raven-pair-iphone",
+    title: "Pair your iPhone",
+    to: "/settings/raven",
+    searchTerms: ["iphone ios mobile phone pair qr code connect raven app token network"],
+  },
+  {
+    id: "raven-hai-key",
+    title: "H Models API key",
+    to: "/settings/raven",
+    searchTerms: ["Raven H HAI_API_KEY H Company model computer use credential"],
+  },
+  {
+    id: "raven-gladia-key",
+    title: "Gladia API key",
+    to: "/settings/raven",
+    searchTerms: ["Raven GLADIA_API_KEY voice transcription credential"],
+  },
+  {
+    id: "raven-linkup-key",
+    title: "Linkup API key",
+    to: "/settings/raven",
+    searchTerms: ["Raven LINKUP_API_KEY web search credential"],
+  },
+  {
+    id: "raven-devin-key",
+    title: "Devin API key",
+    to: "/settings/raven",
+    searchTerms: ["Raven DEVIN_API_KEY code fix credential"],
+  },
+  {
+    id: "raven-h-mode",
+    title: "H mode",
+    to: "/settings/raven",
+    searchTerms: ["Raven H mode local runtime agents api models loop"],
+  },
+  {
+    id: "raven-model",
+    title: "Raven model",
+    to: "/settings/raven",
+    searchTerms: ["Raven HAI_MODEL holo4 27b 35b a3b"],
+  },
+  {
+    id: "raven-idle-suspend",
+    title: "Raven idle suspend",
+    to: "/settings/raven",
+    searchTerms: ["RAVEN_IDLE_SUSPEND_MIN idle machine suspend minutes"],
   },
   {
     id: "auto-settle-inactive-threads",
@@ -1312,6 +1369,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/projects": "project",
   "/settings/general": null,
   "/settings/voice": null,
+  "/settings/raven": null,
   "/settings/appearance": null,
   "/settings/chat": null,
   "/settings/diffs": null,

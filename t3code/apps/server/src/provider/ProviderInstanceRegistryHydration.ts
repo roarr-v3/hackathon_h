@@ -208,14 +208,29 @@ const seedRavenInstances = Effect.fn(
       },
     });
   }
-  const project = yield* findRavenCoreProject();
-  if (project === undefined) return;
+  const ravenCoreCommand = environment.RAVEN_CORE_COMMAND?.trim();
+  const project = ravenCoreCommand ? undefined : yield* findRavenCoreProject();
+  if (!ravenCoreCommand && project === undefined) return;
   const existing = instances[RAVEN_INSTANCE_ID];
   const existingConfig = existing?.config as Record<string, unknown> | undefined;
-  const commandArgs = ["run", "--project", project, "raven-core", "acp"];
-  // Rewritten only when the project path moved; keeps user edits such as a custom uv path.
+  // Rewritten only when the command or project path moved; keeps custom uv paths in dev.
+  const commandArgs = ravenCoreCommand
+    ? ["acp"]
+    : ["run", "--project", project ?? "", "raven-core", "acp"];
+  const existingCommandPath = existingConfig?.commandPath;
+  const existingCommandArgs = existingConfig?.commandArgs;
+  const existingUvCommand =
+    Array.isArray(existingCommandArgs) && existingCommandArgs[0] === "run";
+  const commandPath =
+    ravenCoreCommand ??
+    (existingUvCommand && typeof existingCommandPath === "string"
+      ? existingCommandPath
+      : "uv");
   if (
     existing !== undefined &&
+    (ravenCoreCommand
+      ? existingConfig?.commandPath === commandPath
+      : true) &&
     NodeUtil.isDeepStrictEqual(existingConfig?.commandArgs, commandArgs)
   ) {
     return;
@@ -228,9 +243,9 @@ const seedRavenInstances = Effect.fn(
       ...existing,
       driver,
       config: {
-        commandPath: "uv",
         ...existingConfig,
         source: "local",
+        commandPath,
         commandArgs,
       },
     },

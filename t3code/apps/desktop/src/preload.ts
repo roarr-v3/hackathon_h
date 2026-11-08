@@ -285,6 +285,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     install: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_INSTALL_CHANNEL),
     uninstall: () => ipcRenderer.invoke(IpcChannels.CLI_COMMAND_UNINSTALL_CHANNEL),
   },
+  raven: {
+    getState: () => ipcRenderer.invoke(IpcChannels.RAVEN_GET_STATE_CHANNEL),
+    save: (input) => ipcRenderer.invoke(IpcChannels.RAVEN_SAVE_CHANNEL, input),
+    testKey: (name, value) =>
+      ipcRenderer.invoke(IpcChannels.RAVEN_TEST_KEY_CHANNEL, {
+        name,
+        ...(value === undefined ? {} : { value }),
+      }),
+    restart: () => ipcRenderer.invoke(IpcChannels.RAVEN_RESTART_CHANNEL),
+    openLog: () => ipcRenderer.invoke(IpcChannels.RAVEN_OPEN_LOG_CHANNEL),
+  },
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
       if (typeof state !== "object" || state === null) return;

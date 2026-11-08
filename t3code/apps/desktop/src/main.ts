@@ -79,6 +79,9 @@ import * as DesktopWindow from "./window/DesktopWindow.ts";
 import * as DesktopWslBackend from "./wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "./wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "./wsl/DesktopWslServerTree.ts";
+import * as RavenCoreSidecar from "./raven/RavenCoreSidecar.ts";
+import * as RavenSettings from "./raven/RavenSettings.ts";
+import * as RavenSettingsEnv from "./raven/RavenSettingsEnv.ts";
 
 if (process.argv.includes("--version")) {
   try {
@@ -187,9 +190,23 @@ const layerDesktopAppActivation = DesktopAppActivation.layer.pipe(
   Layer.provide(layerDesktopWindow),
 );
 
+const layerDesktopIdentity = DesktopAppIdentity.layer.pipe(
+  Layer.provideMerge(DesktopAssets.layer),
+);
+
+const layerDesktopRavenSettingsEnv = RavenSettingsEnv.layer.pipe(
+  Layer.provideMerge(layerDesktopIdentity),
+);
+const layerDesktopRavenSidecar = RavenCoreSidecar.layer.pipe(
+  Layer.provideMerge(layerDesktopRavenSettingsEnv),
+);
+const layerDesktopRaven = RavenSettings.layer.pipe(
+  Layer.provideMerge(layerDesktopRavenSidecar),
+);
+
 const layerDesktopBackend = DesktopBackendPool.layer.pipe(
-  Layer.provideMerge(DesktopAppIdentity.layer),
   Layer.provideMerge(DesktopBackendConfiguration.layer),
+  Layer.provideMerge(layerDesktopRaven),
   Layer.provideMerge(DesktopWslEnvironment.layer),
   Layer.provideMerge(DesktopWslServerTree.layer),
   Layer.provideMerge(DesktopTelemetryPublisher.layer),

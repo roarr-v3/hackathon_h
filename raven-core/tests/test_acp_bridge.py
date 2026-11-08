@@ -16,6 +16,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from raven_core.acp.agent import RavenAcpAgent, action_title
 from raven_core.acp.backend import LocalBackend
 
@@ -102,6 +104,44 @@ def test_acp_stdio_handshake_and_help(tmp_path):
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def test_threads_resume_after_an_app_restart(monkeypatch):
+    monkeypatch.setenv("RAVEN_ACP_MANAGED", "1")
+
+    async def scenario() -> None:
+        acp = RavenAcpAgent(lambda _: None)
+        init = await acp.handle("initialize", {"protocolVersion": 1}, True)
+        assert init["agentCapabilities"]["sessionCapabilities"]["resume"] == {}
+        resumed = await acp.handle("session/resume", {"sessionId": "raven-before-restart", "cwd": "/tmp"}, True)
+        assert resumed["models"]["currentModelId"]
+        assert acp.sessions["raven-before-restart"].cwd == "/tmp"
+        await acp.handle("session/resume", {"sessionId": "raven-before-restart", "cwd": "/tmp"}, True)
+        assert list(acp.sessions) == ["raven-before-restart"]
+
+    asyncio.run(scenario())
+
+
+def test_managed_acp_waits_for_core_without_starting_in_process(monkeypatch):
+    monkeypatch.setenv("RAVEN_ACP_MANAGED", "1")
+    monkeypatch.setenv("RAVEN_ACP_WAIT_S", "1")
+    monkeypatch.setenv("RAVEN_URL", "http://127.0.0.1:9")
+    started: list[str] = []
+
+    async def start_in_process(url: str):
+        started.append(url)
+
+    async def fail_if_daemon_starts(url: str, wait_s: float = 20.0):
+        raise AssertionError("managed ACP must not start a daemon")
+
+    monkeypatch.setattr("raven_core.acp.agent.ensure_daemon", fail_if_daemon_starts)
+    acp = RavenAcpAgent(lambda _: None)
+    monkeypatch.setattr(acp, "_start_in_process", start_in_process)
+
+    with pytest.raises(RuntimeError, match="raven-core is not running"):
+        asyncio.run(acp._connect())
+
+    assert started == []
 
 
 # --------------------------------------------------------------------------- in-process
@@ -198,6 +238,14 @@ def test_prompt_text_strips_client_instruction_blocks():
         "\n<runtime_info>you are running in T3 Code</runtime_info>"
     )
     assert RavenAcpAgent.prompt_text([{"type": "text", "text": t3}]) == "on linux: open a terminal"
+    linking = "local web address macos vm\n<pull_request_linking>Link each PR you create…</pull_request_linking>"
+    assert RavenAcpAgent.prompt_text([{"type": "text", "text": linking}]) == "local web address macos vm"
+    handoff = (
+        "Context handoff (delta_since_target_last_seen):\nProvider context handoff. Thread: t.\n"
+        "[Historical user] open youtube\nFailed to open acpRegistry provider session x.\n\n"
+        "User message:\non this mac open TextEdit and type bonjour, ça va ?"
+    )
+    assert RavenAcpAgent.prompt_text([{"type": "text", "text": handoff}]) == "on this mac open TextEdit and type bonjour, ça va ?"
 
 
 def test_action_titles():
