@@ -85,6 +85,7 @@ struct APIClient: Sendable {
         try await send("POST", "/agents/\(agentID)/messages", body: SendMessageRequest(text: text))
     }
     func stopAgent(_ id: String) async throws { try await send("POST", "/agents/\(id)/stop", body: EmptyBody()) }
+    func deleteAgent(_ id: String) async throws { try await send("DELETE", "/agents/\(id)") }
     func runs() async throws -> [Run] { try await get("/runs") }
     func run(_ id: String) async throws -> Run { try await get("/runs/\(id)") }
     func createRun(_ req: CreateRunRequest) async throws -> Run { try await post("/runs", body: req) }

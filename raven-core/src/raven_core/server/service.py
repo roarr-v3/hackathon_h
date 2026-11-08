@@ -873,6 +873,13 @@ class Raven:
             raise NotFound(agent_id)
         return a
 
+    def delete_agent(self, agent_id: str) -> None:
+        agent = self.get_agent(agent_id)
+        handle = self.store.handles.get(agent_id)
+        if agent.status not in TERMINAL_AGENT or (handle and handle.task and not handle.task.done()):
+            raise ValueError("Stop this agent before deleting it.")
+        self.store.delete_agent(agent_id)
+
     def send_message(self, agent_id: str, text: str) -> str | None:
         agent = self.get_agent(agent_id)
         self.emit(Event(type="agent.message", agent_id=agent.id, run_id=agent.run_id, data={"role": "user", "text": text}))

@@ -62,6 +62,11 @@ class EventBus:
     def recent(self) -> list[Event]:
         return list(self._ring)
 
+    def forget(self, agent_id: str) -> None:
+        kept = [event for event in self._ring if event.agent_id != agent_id]
+        self._ring.clear()
+        self._ring.extend(kept)
+
 
 class StopSignal(asyncio.Event):
     """An asyncio.Event that remembers why the agent was told to stop, so its verdict can say
@@ -229,6 +234,32 @@ class Store:
         for run in list(self.runs.values()):
             if run.status not in TERMINAL_RUN:
                 self._emit_now(Event(type="run.status", run_id=run.id, data={"status": RunStatus.stopped.value}))
+
+    def delete_agent(self, agent_id: str) -> None:
+        self.agents.pop(agent_id, None)
+        self.agent_events.pop(agent_id, None)
+        self.handles.pop(agent_id, None)
+        for events in self.run_events.values():
+            events[:] = [event for event in events if event.agent_id != agent_id]
+        for run in self.runs.values():
+            if agent_id in run.agent_ids:
+                run.agent_ids.remove(agent_id)
+        self.bus.forget(agent_id)
+        if self.persist_path is None or not self.persist_path.is_file():
+            return
+        with self._persist_lock:
+            kept = []
+            with self.persist_path.open(encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        if json.loads(line).get("agent_id") == agent_id:
+                            continue
+                    except ValueError:
+                        pass
+                    kept.append(line)
+            temporary = self.persist_path.with_name(self.persist_path.name + ".tmp")
+            temporary.write_text("".join(kept), encoding="utf-8")
+            os.replace(temporary, self.persist_path)
 
     def _persist(self, event: Event) -> None:
         if self.persist_path is None:

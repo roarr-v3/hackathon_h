@@ -3,9 +3,13 @@ import SwiftUI
 struct AgentsListView: View {
     @Environment(RavenStore.self) private var store
     @State private var draft = ""
+    @State private var selecting = false
+    @State private var selection = Set<String>()
+    @State private var confirmDelete = false
 
     var body: some View {
         let agents = store.sortedAgents
+        let deletable = Set(agents.filter { !$0.status.isActive }.map(\.id))
         ScrollView {
             LazyVStack(spacing: 0) {
                 header
@@ -18,10 +22,31 @@ struct AgentsListView: View {
                         .padding(.top, 80)
                 } else {
                     ForEach(agents) { agent in
-                        NavigationLink(value: Route.agent(agent.id)) {
-                            AgentRow(agent: agent)
+                        if selecting {
+                            let canDelete = deletable.contains(agent.id)
+                            Button {
+                                if selection.contains(agent.id) {
+                                    selection.remove(agent.id)
+                                } else if canDelete {
+                                    selection.insert(agent.id)
+                                }
+                            } label: {
+                                HStack(spacing: 0) {
+                                    Image(systemName: selection.contains(agent.id) ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(selection.contains(agent.id) ? Theme.red : Theme.tertiary)
+                                        .padding(.leading, 16)
+                                    AgentRow(agent: agent)
+                                }
+                                .opacity(canDelete ? 1 : 0.4)
+                            }
+                            .buttonStyle(RowButtonStyle())
+                        } else {
+                            NavigationLink(value: Route.agent(agent.id)) {
+                                AgentRow(agent: agent)
+                            }
+                            .buttonStyle(RowButtonStyle())
                         }
-                        .buttonStyle(RowButtonStyle())
                         Hairline().padding(.leading, 64)
                     }
                 }
@@ -31,36 +56,99 @@ struct AgentsListView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(Theme.bg.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ComposerView(target: .home, placeholder: "Ask Raven to test something…", text: $draft)
+            if selecting {
+                deleteBar
+            } else {
+                ComposerView(target: .home, placeholder: "Ask Raven to test something…", text: $draft)
+            }
         }
         .refreshable { await store.refresh() }
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Theme.bg, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                NavigationLink(value: Route.settings) {
-                    ConnectionPill(state: store.connection)
+                if selecting {
+                    Button("Cancel") {
+                        selecting = false
+                        selection = []
+                    }
+                    .font(Theme.mono(14, .medium))
+                    .foregroundStyle(Theme.text)
+                } else {
+                    HStack(spacing: 10) {
+                        Button {
+                            selecting = true
+                        } label: {
+                            Image(systemName: "checkmark.circle")
+                                .font(.system(size: 22, weight: .medium))
+                                .foregroundStyle(Theme.text)
+                        }
+                        .disabled(agents.isEmpty)
+                        NavigationLink(value: Route.settings) {
+                            ConnectionPill(state: store.connection)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .buttonStyle(.plain)
             }
             ToolbarItem(placement: .principal) {
-                Text("raven")
+                Text(selecting ? "\(selection.count) selected" : "raven")
                     .font(Theme.mono(15, .semibold))
                     .foregroundStyle(Theme.text)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 14) {
-                    NavigationLink(value: Route.runs) {
-                        Image(systemName: "square.grid.2x2")
+                if selecting {
+                    Button(selection == deletable && !deletable.isEmpty ? "None" : "All") {
+                        selection = selection == deletable ? [] : deletable
                     }
-                    NavigationLink(value: Route.settings) {
-                        Image(systemName: "gearshape")
+                    .font(Theme.mono(14, .medium))
+                    .foregroundStyle(Theme.text)
+                } else {
+                    HStack(spacing: 14) {
+                        NavigationLink(value: Route.runs) {
+                            Image(systemName: "square.grid.2x2")
+                        }
+                        NavigationLink(value: Route.settings) {
+                            Image(systemName: "gearshape")
+                        }
                     }
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.text)
                 }
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Theme.text)
             }
         }
+        .confirmationDialog(
+            "Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                let ids = selection
+                selection = []
+                selecting = false
+                Task { await store.delete(agentIDs: ids) }
+            }
+        } message: {
+            Text("They are removed from Raven for good, including after a restart.")
+        }
+    }
+
+    private var deleteBar: some View {
+        Button {
+            confirmDelete = true
+        } label: {
+            Label(selection.isEmpty ? "Select chats to delete" : "Delete \(selection.count)", systemImage: "trash")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(selection.isEmpty ? Theme.tertiary : Color.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(Capsule().fill(selection.isEmpty ? Theme.surface2 : Theme.red))
+        }
+        .buttonStyle(.plain)
+        .disabled(selection.isEmpty)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.bg)
     }
 
     private var header: some View {

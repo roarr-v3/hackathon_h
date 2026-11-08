@@ -83,19 +83,19 @@ struct ConnectionPill: View {
     let state: ConnectionState
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             switch state {
             case .connecting:
-                PulsingDots(color: Theme.amber, size: 3.5, spacing: 2)
+                PulsingDots(color: Theme.amber, size: 4.5, spacing: 2.5)
             default:
-                Circle().fill(color).frame(width: 6, height: 6)
+                Circle().fill(color).frame(width: 8, height: 8)
             }
             Text(state.label)
-                .font(Theme.mono(11, .medium))
+                .font(Theme.mono(13, .medium))
                 .foregroundStyle(Theme.secondary)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 7)
         .background(Capsule().fill(Theme.surface2))
         .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 0.5))
     }

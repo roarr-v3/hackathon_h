@@ -145,6 +145,14 @@ def create_app(raven: Raven | None = None) -> FastAPI:
             "events": [e.model_dump(mode="json") for e in events],
         }
 
+    @app.delete("/agents/{agent_id}", dependencies=A)
+    async def delete_agent(agent_id: str) -> dict[str, bool]:
+        try:
+            nf(raven.delete_agent, agent_id)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"ok": True}
+
     @app.post("/agents/{agent_id}/messages", dependencies=A)
     async def send_message(agent_id: str, req: SendMessageRequest) -> dict[str, Any]:
         target = nf(raven.send_message, agent_id, req.text)

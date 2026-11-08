@@ -205,6 +205,25 @@ def test_agent_history_survives_a_restart(tmp_path, monkeypatch):
     assert Raven(settings=settings).store.agents[busy.id].status == AgentStatus.stopped
 
 
+def test_deleted_agents_stay_deleted_after_a_restart(tmp_path, monkeypatch):
+    monkeypatch.delenv("RAVEN_PERSIST", raising=False)
+    settings = Settings(token=None, artifacts_dir=tmp_path / "artifacts", specs_dir=tmp_path)
+    first = Raven(settings=settings)
+    keep = Agent(platform=Platform.linux, worker="w", title="keep", task="a", status=AgentStatus.passed)
+    gone = Agent(platform=Platform.linux, worker="w", title="gone", task="b", status=AgentStatus.failed)
+    busy = Agent(platform=Platform.linux, worker="w", title="busy", task="c", status=AgentStatus.running)
+    for agent in (keep, gone, busy):
+        first.store.emit(Event(type="agent.created", agent_id=agent.id, data={"agent": agent.model_dump(mode="json")}))
+    with TestClient(create_app(first)) as client:
+        assert client.delete(f"/agents/{gone.id}").status_code == 200
+        assert client.delete(f"/agents/{busy.id}").status_code == 409
+        assert client.delete("/agents/nope").status_code == 404
+        assert {a["id"] for a in client.get("/agents").json()} == {keep.id, busy.id}
+        assert client.get(f"/agents/{gone.id}").status_code == 404
+    assert all(event.agent_id != gone.id for event in first.store.bus.recent())
+    assert set(Raven(settings=settings).store.agents) == {keep.id, busy.id}
+
+
 def test_stop_agent(client):
     agent = client.post("/agents", json={"platform": "linux", "task": "wait forever"}).json()
     wait_until(lambda: agent_status(client, agent["id"]) == "running")

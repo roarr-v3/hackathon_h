@@ -41,6 +41,7 @@ final class RavenStore {
     let voice = VoiceRecorder()
 
     @ObservationIgnored private var seen = Set<String>()
+    @ObservationIgnored private var deleted = Set<String>()
     @ObservationIgnored private let socket = EventSocket()
     @ObservationIgnored private var demo: DemoEngine?
     @ObservationIgnored private var started = false
@@ -190,6 +191,7 @@ final class RavenStore {
     // MARK: Event ingestion
 
     func upsert(_ agent: Agent) {
+        guard !deleted.contains(agent.id) else { return }
         if var existing = agents[agent.id] {
             // Keep a newer screenshot we may have learned from events.
             let shot = agent.lastScreenshot ?? existing.lastScreenshot
@@ -208,6 +210,7 @@ final class RavenStore {
     func ingest(_ e: RavenEvent) {
         guard !seen.contains(e.id) else { return }
         seen.insert(e.id)
+        if let id = e.agentId, deleted.contains(id) { return }
 
         switch e.type {
         case EventType.agentCreated:
@@ -351,6 +354,26 @@ final class RavenStore {
             } catch {
                 flash("Command failed: \(error.localizedDescription)")
             }
+        }
+    }
+
+    func delete(agentIDs: Set<String>) async {
+        var failed = 0
+        for id in agentIDs {
+            if !demoMode {
+                do {
+                    try await api?.deleteAgent(id)
+                } catch {
+                    failed += 1
+                    continue
+                }
+            }
+            deleted.insert(id)
+            agents[id] = nil
+            eventsByAgent[id] = nil
+        }
+        if failed > 0 {
+            flash("Could not delete \(failed) chat\(failed == 1 ? "" : "s"). Stop running agents first.")
         }
     }
 

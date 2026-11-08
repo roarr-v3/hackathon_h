@@ -81,6 +81,7 @@ pairing token. `/health` is unauthenticated.
   Free-form prompts (Raven Agent, iPhone home/thread composer, voice) that mention an iPhone/iPad/iOS use
   the iOS workflow (this Mac controlling the phone through Device Hub); prompts naming no platform run on the Mac.
 - `POST /agents/{id}/stop`
+- `DELETE /agents/{id}` removes a finished agent from memory, the WS replay and `events.jsonl` (409 while active)
 - `GET/POST /agents/{id}/approvals/{approval_id}` — inspect a pending local repair operation,
   then submit `{"option_id": "<offered allow_once ID>"}` or `{"option_id": null}` to deny.
   ACP forwards these through `session/request_permission`; no allow-always.
