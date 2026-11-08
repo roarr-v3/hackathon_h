@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import math
 import os
 import shlex
-import time
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
-from raven_core.events import Agent, AgentStatus, CreateAgentRequest, Event, Placement, Platform, Run, RunStatus
+from raven_core.events import Agent, AgentStatus, CreateAgentRequest, Event, ExecutionProfile, Placement, Platform, Run, RunStatus
 from raven_core.specs import Spec, SpecAgent
-from raven_core.workers import get_worker
+from raven_core.workers import FakeWorker, get_worker
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +20,11 @@ TERMINAL = {AgentStatus.passed, AgentStatus.failed, AgentStatus.stopped, AgentSt
 SENDER_DELAY_S = float(os.environ.get("RAVEN_SENDER_DELAY_S", "20"))
 
 StartAgent = Callable[[CreateAgentRequest, str], Awaitable[Agent]]
+StopAgent = Callable[..., Awaitable[None]]  # (agent_id, reason=None)
+
+
+class SetupTimeoutError(TimeoutError):
+    """Application setup timed out before H computer use started."""
 
 
 def launch_command(platform: Platform, cmd: str) -> tuple[str, bool]:
@@ -49,18 +55,49 @@ def launch_command(platform: Platform, cmd: str) -> tuple[str, bool]:
     return cmd, False
 
 
-async def setup_platform(platform: Platform, cmds: list[str], placement: Placement = Placement.auto) -> None:
-    worker = get_worker(platform, placement=placement)
-    for raw in cmds:
-        cmd, background = launch_command(platform, raw)
-        try:
-            rc, out, err = await worker.shell(cmd, timeout=60)
-            if rc != 0:
-                log.warning("setup %s rc=%s: %s %s", platform.value, rc, out[-300:], err[-300:])
-        except Exception as e:  # noqa: BLE001
-            log.warning("setup %s failed: %s", platform.value, e)
-        if background:
-            await asyncio.sleep(2)  # let the window appear before the agent's first screenshot
+async def setup_platform(
+    platform: Platform, cmds: list[str], placement: Placement = Placement.auto,
+    *, worker: Any = None, execution: ExecutionProfile | None = None, timeout_s: float = 60.0,
+) -> Any:
+    """Share one finite budget across preparation, commands and window waits."""
+    if not math.isfinite(timeout_s) or timeout_s <= 0:
+        raise ValueError("setup timeout_s must be finite and positive")
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    phase = "selecting the setup worker"
+    try:
+        async with asyncio.timeout_at(deadline):
+            if worker is None:
+                worker = get_worker(platform, placement=placement, execution=execution)
+                if execution is not None:
+                    from raven_core.workers import prepare_worker
+
+                    phase = "preparing the setup worker"
+                    worker = await prepare_worker(worker, execution=execution)
+            if execution is None and getattr(worker, "target", None) in ("apple-container", "lume"):
+                from raven_core import machines
+
+                phase = "preparing the setup worker"
+                await machines.ensure(platform)
+            for index, raw in enumerate(cmds, 1):
+                cmd, background = launch_command(platform, raw)
+                phase = f"running setup command {index}/{len(cmds)}"
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError
+                rc, out, err = await worker.shell(cmd, timeout=remaining)
+                if rc == 124:
+                    raise TimeoutError
+                if rc != 0:
+                    raise RuntimeError(f"setup command {index}/{len(cmds)} exited {rc}: {(err or out)[-300:]}")
+                if background:
+                    phase = f"waiting for the window after setup command {index}/{len(cmds)}"
+                    await asyncio.sleep(2)  # let the window appear before the agent's first screenshot
+    except TimeoutError:
+        raise SetupTimeoutError(
+            f"{platform.value} setup timed out while {phase} (setup budget {timeout_s:g}s; before H computer use)"
+        ) from None
+    return worker
 
 
 def agent_request(spec: Spec, a: SpecAgent, placement: Placement = Placement.auto) -> CreateAgentRequest:
@@ -77,7 +114,15 @@ def agent_request(spec: Spec, a: SpecAgent, placement: Placement = Placement.aut
         title = f"{a.platform.value} · {a.role}"
     else:
         title = f"{spec.name} on {a.platform.value}"
-    return CreateAgentRequest(platform=a.platform, task=a.task.strip() + context, title=title, placement=placement)
+    task = (
+        f"Setup: Use the assigned {a.platform.value} desktop and verify the starting screen.\n\n"
+        f"Task and expected result:\n{a.task.strip()}{context}\n\n"
+        "Verification: Base the verdict on what you see on screen. Stop and describe the blocker if "
+        "you cannot run the test. After two unchanged observations, change approach or stop."
+    )
+    # The agent gets the suite's deadline so it ends itself (naming the phase it was in) instead
+    # of being stopped from the outside; the runner's own timeout below is only a backstop.
+    return CreateAgentRequest(platform=a.platform, task=task, title=title, placement=placement, timeout_s=spec.timeout_s)
 
 
 async def run_spec(
@@ -87,95 +132,139 @@ async def run_spec(
     run: Run,
     *,
     emit: Callable[[Event], Awaitable[None]] | None = None,
-    stop_agent: Callable[[str], Awaitable[None]] | None = None,
+    stop_agent: StopAgent | None = None,
+    reload_spec: Callable[[], Spec] | None = None,
+    wait_for_agents: Callable[[], Awaitable[None]] | None = None,
+    prepare_platform: Callable[[Platform, list[str]], Awaitable[Any]] | None = None,
+    failure_context: Callable[[list[Agent]], dict[str, Any]] | None = None,
     placement: Placement = Placement.auto,
     poll_s: float = 1.0,
     grace_s: float = 60.0,
 ) -> None:
-    """Run a spec to completion. Mutates run.status / run.agent_ids.
-
-    Optional: `emit` (to publish run.status), `stop_agent(agent_id)` (used on overall timeout).
-    """
-
-    async def set_status(s: RunStatus) -> None:
-        run.status = s
+    """Retry repeatable suites on execution errors, keeping each attempt's evidence."""
+    async def set_status(status: RunStatus) -> None:
+        run.status = status
         if emit:
+            await emit(Event(type="run.status", run_id=run.id, data={"status": status.value}))
+
+    async def progress(text: str) -> None:
+        log.info("%s: %s", run.id, text)
+        if emit:
+            await emit(Event(type="agent.message", run_id=run.id, data={"role": "system", "text": text}))
+
+    async def stop_pending(agents: list[Agent], reason: str | None = None) -> None:
+        if stop_agent:
+            await asyncio.gather(*(stop_agent(a.id, reason) for a in agents if a.status not in TERMINAL))
+
+    async def settle() -> None:
+        """Give agents that were just stopped a moment to record their final reason."""
+        if wait_for_agents:
             try:
-                await emit(Event(type="run.status", run_id=run.id, data={"status": s.value}))
-            except Exception:  # noqa: BLE001
-                log.exception("emit failed")
+                await wait_for_agents()
+            except TimeoutError:
+                pass
 
-    wanted = [Platform(p) for p in platforms] if platforms else spec.platforms
-    chosen = [a for a in spec.agents if a.platform in wanted]
-    if not chosen:
-        await set_status(RunStatus.failed)
-        return
     await set_status(RunStatus.running)
+    wanted = set(platforms or spec.platforms)
+    attempts = spec.attempts
+    previous_agents: list[Agent] = []
+    for attempt in range(1, attempts + 1):
+        if run.status == RunStatus.stopped:
+            return
+        if attempt > 1 and reload_spec:
+            spec = reload_spec()
+        chosen = [a for a in spec.agents if a.platform in wanted]
+        if not chosen:
+            await progress("No test steps matched the selected platforms.")
+            break
+        if attempts > 1:
+            await progress(f"Starting QA attempt {attempt}/{attempts}.")
 
-    try:
-        # 1. setup apps on every selected platform, concurrently
-        await asyncio.gather(
-            *(setup_platform(p, spec.setup[p], placement) for p in {a.platform for a in chosen} if spec.setup.get(p)),
-            return_exceptions=True,
+        setup = list(dict.fromkeys(a.platform for a in chosen if prepare_platform or spec.setup.get(a.platform)))
+        results = await asyncio.gather(
+            *(prepare_platform(p, spec.setup.get(p, [])) if prepare_platform
+              else setup_platform(p, spec.setup[p], placement, **({"execution": run.execution} if run.execution else {}))
+              for p in setup), return_exceptions=True,
         )
-
-        # 2. start agents (senders get a head-start delay so receivers are subscribed first:
-        #    Nostr geohash messages are ephemeral and are not replayed to late joiners)
+        errors = [f"{p.value} setup: {r}" for p, r in zip(setup, results) if isinstance(r, BaseException)]
         agents: list[Agent] = []
 
         async def start(a: SpecAgent) -> None:
             delay = a.start_delay_s
             if delay is None:
-                delay = SENDER_DELAY_S if (a.role == "sender" and len(chosen) > 1) else 0
+                delay = SENDER_DELAY_S if a.role == "sender" and len(chosen) > 1 else 0
             if delay:
                 await asyncio.sleep(delay)
             if run.status == RunStatus.stopped:
                 return
-            agent = await start_agent(agent_request(spec, a, placement), run.id)
+            request = agent_request(spec, a, placement)
+            request.execution = run.execution.model_copy(deep=True) if run.execution else None
+            if attempt > 1:
+                request.task += (
+                    "\n\nThe previous attempt had an execution error. Verify the current screen and app state "
+                    "from scratch. If an action leaves the screen unchanged twice, use a different route or "
+                    "stop and explain the blocker. Require fresh evidence for this attempt."
+                )
+                if failure_context:
+                    context = failure_context([previous for previous in previous_agents if previous.platform == a.platform])
+                    failures = [
+                        {key: value for key, value in failure.items() if key not in ("task", "task_id")}
+                        for failure in context.get("failures", [])
+                    ]
+                    request.task += (
+                        "\n\nHistorical failure evidence follows. Keep the current suite's assertions and inputs; "
+                        "use this evidence only to recover from the execution error:\n"
+                        + json.dumps({"failures": failures}, ensure_ascii=False)
+                    )
+            agent = await start_agent(request, run.id)
             agents.append(agent)
             if agent.id not in run.agent_ids:
                 run.agent_ids.append(agent.id)
 
-        starters = asyncio.gather(*(start(a) for a in chosen), return_exceptions=True)
-
-        # 3. wait for all agents to be terminal
-        max_delay = max([SENDER_DELAY_S] + [a.start_delay_s or 0 for a in chosen])
-        deadline = time.monotonic() + spec.timeout_s + grace_s + max_delay
-        results = None
-        while True:
-            if starters.done() and results is None:
-                results = starters.result()
-                for r in results:
-                    if isinstance(r, BaseException):
-                        log.error("start_agent failed: %r", r)
-            if run.status == RunStatus.stopped:
-                break
-            if results is not None and all(a.status in TERMINAL for a in agents):
-                break
-            if time.monotonic() > deadline:
-                log.warning("run %s timed out", run.id)
-                for a in agents:
-                    if a.status not in TERMINAL and stop_agent:
-                        try:
-                            await stop_agent(a.id)
-                        except Exception:  # noqa: BLE001
-                            pass
-                break
-            await asyncio.sleep(poll_s)
+        if not errors:
+            max_delay = max(
+                (a.start_delay_s if a.start_delay_s is not None else
+                 SENDER_DELAY_S if a.role == "sender" and len(chosen) > 1 else 0)
+                for a in chosen
+            )
+            attempt_limit = spec.timeout_s + grace_s + max_delay
+            try:
+                async with asyncio.timeout(attempt_limit):
+                    started = await asyncio.gather(*(start(a) for a in chosen), return_exceptions=True)
+                    errors.extend(f"{a.platform.value} startup: {r}" for a, r in zip(chosen, started)
+                                  if isinstance(r, BaseException))
+                    while run.status != RunStatus.stopped and any(a.status not in TERMINAL for a in agents):
+                        await asyncio.sleep(poll_s)
+            except TimeoutError:
+                # Agents normally end on their own spec.timeout_s deadline; reaching this means one did not.
+                reason = f"QA attempt exceeded {attempt_limit:.0f}s while waiting for computer use"
+                errors.append(reason + ".")
+                await stop_pending(agents, reason)
+                await settle()
+            except asyncio.CancelledError:
+                await stop_pending(agents, "Run cancelled")
+                raise
 
         if run.status == RunStatus.stopped:
-            starters.cancel()
             return
-        ok = (
-            results is not None
-            and not any(isinstance(r, BaseException) for r in results)
-            and len(agents) == len(chosen)
-            and all(a.status == AgentStatus.passed for a in agents)
-        )
-        await set_status(RunStatus.passed if ok else RunStatus.failed)
-    except asyncio.CancelledError:
-        await set_status(RunStatus.stopped)
-        raise
-    except Exception:  # noqa: BLE001
-        log.exception("run %s crashed", run.id)
+        # Agents still pending at this point were stopped by the attempt timeout above (a user stop
+        # returns earlier); their reason says what they were waiting for.
+        errors.extend(f"{a.platform.value}: {a.verdict_reason or 'agent execution error'}"
+                      for a in agents if a.status in (AgentStatus.error, AgentStatus.stopped))
+        if not errors and len(agents) == len(chosen) and all(a.status == AgentStatus.passed for a in agents):
+            await set_status(RunStatus.passed)
+            return
+        if errors:
+            await progress(f"Attempt {attempt}/{attempts}: " + " | ".join(errors))
+        if not errors or any(a.status == AgentStatus.failed for a in agents) or attempt == attempts:
+            break
+        if wait_for_agents:
+            await wait_for_agents()
+        elif any(a.status not in TERMINAL for a in agents):
+            break
+        await progress("Retrying the suite after an execution error.")
+        previous_agents = agents
+        await asyncio.sleep(poll_s)
+
+    if run.status != RunStatus.stopped:
         await set_status(RunStatus.failed)

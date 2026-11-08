@@ -63,12 +63,28 @@ class EventBus:
         return list(self._ring)
 
 
+class StopSignal(asyncio.Event):
+    """An asyncio.Event that remembers why the agent was told to stop, so its verdict can say
+    "QA attempt timed out ..." instead of "Stopped by user" when the runner pulled the plug."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reason: str | None = None
+        self.cause: str = "user"
+
+    def set(self, reason: str | None = None, *, cause: str = "user") -> None:  # type: ignore[override]
+        if not self.is_set():
+            self.reason = reason
+            self.cause = cause
+        super().set()
+
+
 @dataclass
 class AgentHandle:
     """Runtime control for a running agent (kept so /messages and /stop work)."""
 
     inbox: asyncio.Queue[str]
-    stop: asyncio.Event
+    stop: StopSignal
     task: asyncio.Task[Any] | None = None
 
 
@@ -158,6 +174,16 @@ class Store:
                 agent = self.agents.get(ev.agent_id or "")
                 if agent is not None:
                     agent.status = AgentStatus(d.get("status"))
+            elif ev.type == "agent.message" and d.get("phase") == "planning" and d.get("state") == "ready":
+                agent = self.agents.get(ev.agent_id or "")
+                if agent is not None:
+                    agent.task = d.get("task") or agent.task
+                    agent.planning_session_id = d.get("planning_session_id")
+            elif ev.type == "agent.message" and d.get("phase") == "target" and d.get("state") == "ready":
+                agent = self.agents.get(ev.agent_id or "")
+                if agent is not None:
+                    agent.worker = d.get("worker") or agent.worker
+                    agent.placement = d.get("placement")
             elif ev.type == "agent.screenshot":
                 agent = self.agents.get(ev.agent_id or "")
                 if agent is not None and d.get("url"):

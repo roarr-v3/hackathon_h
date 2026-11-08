@@ -9,7 +9,7 @@ import uuid
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 def new_id(prefix: str) -> str:
@@ -29,6 +29,34 @@ class Placement(StrEnum):
     vm = "vm"
 
 
+class HMode(StrEnum):
+    auto = "auto"
+    local_runtime = "local-runtime"
+    agents_api = "agents-api"
+    models_loop = "models-loop"
+
+
+class ExecutionProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    planner: Literal["local", "cloud"] = "local"
+    model: str = Field(default="holo4-27b", pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+    h_mode: HMode = HMode.auto
+    platform_modes: dict[Platform, HMode] = Field(default_factory=dict)
+    linux_target: Literal["apple-container", "devin-vm"] = "apple-container"
+    linux_space: str = Field(default="raven-linux-apple", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+    linux_fallback: bool = True
+    windows_target: Literal["devin-vm"] = "devin-vm"
+    ios_target: Literal["simulator", "device"] = "simulator"
+    ios_device_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9:-]{1,128}$")
+
+    def mode_for(self, platform: Platform) -> HMode:
+        mode = self.platform_modes.get(platform, self.h_mode)
+        if mode != HMode.auto:
+            return mode
+        return HMode.agents_api if platform in (Platform.linux, Platform.windows) else HMode.local_runtime
+
+
 class AgentStatus(StrEnum):
     queued = "queued"
     running = "running"
@@ -36,6 +64,13 @@ class AgentStatus(StrEnum):
     failed = "failed"
     stopped = "stopped"
     error = "error"
+
+
+class StopCause(StrEnum):
+    user = "user"
+    deadline = "deadline"
+    shutdown = "shutdown"
+    cancelled = "cancelled"
 
 
 class RunStatus(StrEnum):
@@ -58,6 +93,10 @@ class Agent(BaseModel):
     last_screenshot: str | None = None
     verdict_reason: str | None = None
     placement: Placement | None = None
+    execution: ExecutionProfile | None = None
+    original_task: str | None = None
+    planning_session_id: str | None = None
+    repo_path: str | None = None
 
 
 class Run(BaseModel):
@@ -67,6 +106,7 @@ class Run(BaseModel):
     status: RunStatus = RunStatus.queued
     agent_ids: list[str] = []
     created_at: float = Field(default_factory=time.time)
+    execution: ExecutionProfile | None = None
 
 
 EventType = Literal[
@@ -109,16 +149,29 @@ class CreateAgentRequest(BaseModel):
     task: str
     title: str | None = None
     placement: Placement = Placement.auto
+    # Whole-agent budget in seconds (a spec passes its timeout_s). Default: RAVEN_AGENT_TIMEOUT_S.
+    timeout_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    execution: ExecutionProfile | None = None
+    repo_path: str | None = None
+    previous_agent_id: str | None = None
+    repair: bool = False
+    model: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
 class SendMessageRequest(BaseModel):
     text: str
 
 
+class ApprovalDecision(BaseModel):
+    option_id: str | None = None
+
+
 class CreateRunRequest(BaseModel):
     spec: str
     platforms: list[Platform] | None = None
     placement: Placement = Placement.auto
+    execution: ExecutionProfile | None = None
+    model: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
 class VoiceSession(BaseModel):

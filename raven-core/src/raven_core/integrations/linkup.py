@@ -53,6 +53,14 @@ async def search(query: str, depth: str = "standard") -> dict[str, Any] | None:
     return {"query": query, "answer": data.get("answer") or "", "sources": sources}
 
 
-def failure_query(platform: str, reason: str) -> str:
-    reason = " ".join((reason or "test failed").split())[:240]
-    return f"bitchat {platform} {reason}"
+def failure_query(platform: str, category: str) -> str:
+    from raven_core.events import Platform
+
+    topic = {
+        "blocked": "desktop automation setup accessibility permissions blocked",
+        "execution": "desktop automation tool execution errors permissions",
+        "timeout": "GUI automation timeout unchanged screen troubleshooting",
+        "assertion": "GUI testing visible assertion failure reproduction",
+        "cancelled": "GUI testing interrupted execution resume verification",
+    }.get(category, "GUI testing failure troubleshooting")
+    return f"{Platform(platform).value} {topic}"

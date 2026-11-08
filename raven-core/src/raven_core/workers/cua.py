@@ -1,9 +1,7 @@
 """Cua-backed worker (python SDK `cua_sandbox`, pip/uv package `cua-sandbox`).
 
-- Local sandboxes by name:   Sandbox.connect("raven-linux")   (Docker/colima container)
-                             Sandbox.connect("raven-mac")     (Lume VM)
-- Remote cua-spacesd by URL: Sandbox.connect(url="http://<tailscale-ip>:3211", token=...)
-  (the Windows PC; see workers/windows/README.md)
+- Existing local Spaces:    Sandbox.connect("local:raven-linux-apple") (Apple Containerization)
+                             Sandbox.connect("local:raven-mac")         (explicit Lume VM)
 
 The SDK is imported lazily so tests / fake mode don't need it installed.
 """
@@ -15,7 +13,7 @@ import logging
 from typing import Any
 
 from raven_core.events import Platform
-from raven_core.workers.base import ShellResult, WorkerUnavailable, parse_combo, png_size
+from raven_core.workers.base import ShellResult, parse_combo, png_size
 
 log = logging.getLogger(__name__)
 
@@ -44,22 +42,57 @@ class CuaWorker:
         platform: Platform,
         name: str,
         *,
-        url: str | None = None,
-        token: str | None = None,
         connect_timeout: float = 60.0,
     ):
+        from raven_core.machines import space_name
+
         self.platform = Platform(platform)
-        self.name = name
-        self._url = url
-        self._token = token
+        if self.platform not in (Platform.linux, Platform.macos):
+            from raven_core.hosts.capabilities import CapabilityCategory, CapabilityError
+
+            raise CapabilityError(CapabilityCategory.configuration, "Cua supports named local Linux/macOS Spaces; Windows uses Devin.")
+        self.name = space_name(name)
         self._connect_timeout = connect_timeout
         self._sb: Any = None
         self._lock = asyncio.Lock()
         self._size: tuple[int, int] | None = None
+        self._prepared = False
+        self.preparation_phase = "checking Space metadata"
+        self._runtime_checked = False
+        self.target = "apple-container" if self.platform == Platform.linux else "lume"
 
-    def __repr__(self) -> str:  # never include the token
-        where = self._url or f"local:{self.name}"
-        return f"CuaWorker({self.platform.value}, {where})"
+    def __repr__(self) -> str:
+        return f"CuaWorker({self.platform.value}, local:{self.name})"
+
+    async def prepare(self) -> None:
+        if self._prepared:
+            return
+        from raven_core.machines import ensure_space
+
+        await ensure_space(self.platform, self.name)
+        self._runtime_checked = True
+        self.preparation_phase = "connecting to the selected Space"
+        await self._sandbox()
+        from raven_core.hosts.capabilities import CapabilityCategory, CapabilityError
+
+        try:
+            self.preparation_phase = "waiting for the selected desktop to return a screenshot"
+            png = await asyncio.wait_for(self.screenshot(), timeout=min(15.0, self._connect_timeout))
+        except TimeoutError:
+            raise CapabilityError(
+                CapabilityCategory.desktop_unavailable,
+                f"The selected desktop `{self.name}` did not answer its screenshot probe within "
+                f"{min(15.0, self._connect_timeout):g}s. A running Space listing does not establish "
+                "desktop reachability; check the guest service, network route, and local-network permissions.",
+            ) from None
+        except (ConnectionError, OSError, asyncio.TimeoutError) as exc:
+            from raven_core.hosts.capabilities import command_failure
+
+            raise command_failure("Checking the selected Cua desktop", str(exc), local_desktop=True) from None
+        if png_size(png) == (0, 0):
+            raise CapabilityError(CapabilityCategory.desktop_unavailable, "The selected Cua desktop returned no PNG screenshot")
+        self._prepared = True
+        self.preparation_phase = "desktop ready"
 
     async def _sandbox(self) -> Any:
         if self._sb is not None:
@@ -67,27 +100,37 @@ class CuaWorker:
         async with self._lock:
             if self._sb is not None:
                 return self._sb
+            if not self._runtime_checked:
+                from raven_core.hosts.capabilities import CapabilityCategory, CapabilityError
+                from raven_core.machines import space_info, validate_space
+
+                row = await space_info(self.name)
+                if row is None:
+                    raise CapabilityError(CapabilityCategory.desktop_unavailable, "The selected local Space does not exist")
+                validate_space(row, self.platform)
+                self._runtime_checked = True
             try:
                 _patch_cua_embedded()
                 from cua_sandbox import Sandbox  # type: ignore
-            except ImportError as e:  # pragma: no cover - depends on env
-                raise WorkerUnavailable(
-                    "cua-sandbox is not installed (cd raven-core && uv add cua-sandbox), "
-                    "or set RAVEN_FAKE_WORKERS=1"
-                ) from e
+            except ImportError:  # pragma: no cover - depends on env
+                from raven_core.hosts.capabilities import CapabilityCategory, CapabilityError
+
+                raise CapabilityError(
+                    CapabilityCategory.dependency, "Install Raven's cua-sandbox dependency to use the Cua Models driver",
+                ) from None
             try:
-                if self._url:
-                    conn = Sandbox.connect(url=self._url, token=self._token)
-                else:
-                    conn = Sandbox.connect(self.name)
+                conn = Sandbox.connect(f"local:{self.name}", local=True)
                 self._sb = await asyncio.wait_for(_awaitable(conn), self._connect_timeout)
             except Exception as e:
-                raise WorkerUnavailable(f"cannot connect to {self!r}: {type(e).__name__}: {e}") from e
+                from raven_core.hosts.capabilities import command_failure
+
+                raise command_failure(f"Connecting to {self!r}", str(e), local_desktop=True) from None
             log.info("connected %r", self)
             return self._sb
 
     async def _reset(self) -> None:
         sb, self._sb = self._sb, None
+        self._runtime_checked = False
         if sb is not None:
             try:
                 await sb.disconnect()
@@ -95,9 +138,10 @@ class CuaWorker:
                 pass
 
     async def _call(self, fn_name: str, *path_and_args: Any, **kwargs: Any) -> Any:
-        """Call sb.<path>(*args) with one reconnect-retry on transport errors."""
+        """Read-only calls may reconnect once. Never replay input/setup after an uncertain send."""
         path = fn_name.split(".")
-        for attempt in (0, 1):
+        attempts = (0, 1) if fn_name in ("screenshot", "screen.size", "get_dimensions") else (1,)
+        for attempt in attempts:
             sb = await self._sandbox()
             target: Any = sb
             for p in path:
@@ -107,7 +151,7 @@ class CuaWorker:
             except (ConnectionError, OSError, asyncio.TimeoutError) as e:
                 if attempt:
                     raise
-                log.warning("%r %s failed (%s), reconnecting", self, fn_name, e)
+                log.warning("%r %s failed (%s), reconnecting", self, fn_name, type(e).__name__)
                 await self._reset()
 
     # --- Worker protocol -------------------------------------------------
@@ -162,6 +206,7 @@ class CuaWorker:
 
     async def close(self) -> None:
         await self._reset()
+        self._prepared = False
 
 
 async def _awaitable(x: Any) -> Any:

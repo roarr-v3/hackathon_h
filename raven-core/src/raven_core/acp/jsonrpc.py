@@ -33,6 +33,8 @@ class Connection:
         self._handler = handler
         self._lock = threading.Lock()
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._requests: dict[str, asyncio.Future[Any]] = {}
+        self._request_id = 0
 
     # ------------------------------------------------------------------ out
     def send(self, obj: dict[str, Any]) -> None:
@@ -46,6 +48,17 @@ class Connection:
     def notify(self, method: str, params: dict[str, Any]) -> None:
         self.send({"jsonrpc": "2.0", "method": method, "params": params})
 
+    async def request(self, method: str, params: dict[str, Any]) -> Any:
+        self._request_id += 1
+        request_id = f"raven-{self._request_id}"
+        answer = asyncio.get_running_loop().create_future()
+        self._requests[request_id] = answer
+        try:
+            self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+            return await answer
+        finally:
+            self._requests.pop(request_id, None)
+
     # ------------------------------------------------------------------ in
     def feed(self, line: bytes | str) -> None:
         line = line.strip()
@@ -56,8 +69,16 @@ class Connection:
         except json.JSONDecodeError:
             self.send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
             return
-        if not isinstance(msg, dict) or "method" not in msg:
-            return  # responses to requests we never send
+        if not isinstance(msg, dict):
+            return
+        if "method" not in msg:
+            answer = self._requests.get(msg.get("id")) if isinstance(msg.get("id"), str) else None
+            if answer is not None and not answer.done():
+                if error := msg.get("error"):
+                    answer.set_exception(RpcError(error.get("code", -32603), error.get("message", "Client request failed")))
+                else:
+                    answer.set_result(msg.get("result"))
+            return
         is_request = "id" in msg and msg["id"] is not None
         t = asyncio.get_running_loop().create_task(
             self._dispatch(msg.get("id"), msg["method"], msg.get("params") or {}, is_request)
@@ -100,6 +121,8 @@ class Connection:
     def cancel_all(self) -> None:
         for t in list(self._tasks):
             t.cancel()
+        for answer in list(self._requests.values()):
+            answer.cancel()
 
 
 def stdin_line_reader(loop: asyncio.AbstractEventLoop) -> Callable[[], Awaitable[bytes]]:

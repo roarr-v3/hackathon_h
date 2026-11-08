@@ -10,7 +10,6 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { QRCodeSvg } from "../ui/qr-code";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting, type SettingsSearchItemId } from "./settingsSearch";
 
@@ -70,17 +69,6 @@ const STATUS_VARIANTS: Record<
   stopped: "error",
 };
 
-const H_MODES = [
-  { value: "local-runtime", label: "Local runtime" },
-  { value: "agents-api", label: "Agents API" },
-  { value: "models-loop", label: "Models loop" },
-] as const;
-
-const MODELS = [
-  { value: "holo4-27b", label: "Holo4 27B" },
-  { value: "holo4-35b-a3b", label: "Holo4 35B-A3B" },
-] as const;
-
 export function RavenSettings() {
   const bridge = typeof window === "undefined" ? undefined : window.desktopBridge?.raven;
   const [state, setState] = useState<DesktopRavenSettingsState | null>(null);
@@ -90,9 +78,7 @@ export function RavenSettings() {
     LINKUP_API_KEY: "",
     DEVIN_API_KEY: "",
   });
-  const [draft, setDraft] = useState<{ hMode?: string; model?: string; idleSuspendMin?: string }>(
-    {},
-  );
+  const [draft, setDraft] = useState<{ idleSuspendMin?: string }>({});
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -116,8 +102,6 @@ export function RavenSettings() {
     };
   }, [bridge]);
 
-  const hMode = draft.hMode ?? state?.settings.hMode ?? "local-runtime";
-  const model = draft.model ?? state?.settings.model ?? "holo4-27b";
   const idleSuspendMin = draft.idleSuspendMin ?? String(state?.settings.idleSuspendMin ?? 20);
   const settingsDirty = Object.keys(draft).length > 0;
 
@@ -173,14 +157,12 @@ export function RavenSettings() {
     run(async () => {
       const input: DesktopRavenSettingsSaveInput = {
         settings: {
-          hMode: hMode as (typeof H_MODES)[number]["value"],
-          model: model as (typeof MODELS)[number]["value"],
           idleSuspendMin: minutes,
         },
       };
       setState(await bridge.save(input));
       setDraft({});
-      setFeedback("Raven settings saved.");
+      setFeedback("Idle suspend setting saved.");
     }, "Could not save Raven settings.");
   };
 
@@ -227,7 +209,8 @@ export function RavenSettings() {
         ) : null}
         {status?.state === "external" ? (
           <p className="px-4 pb-3 text-xs text-muted-foreground">
-            raven-core was started outside Raven Agent; restart it to apply changes.
+            raven-core was started outside Raven Agent; restart it to apply API key or idle-setting
+            changes. Execution defaults apply to future runs without a restart.
           </p>
         ) : null}
       </SettingsSection>
@@ -311,55 +294,22 @@ export function RavenSettings() {
         ))}
       </SettingsSection>
 
-      <SettingsSection title="Raven settings">
+      <SettingsSection title="Execution defaults">
         <SettingsRow
           {...searchableSetting("raven-h-mode")}
           title="H mode"
-          description="Choose how Raven runs H's computer-use agent."
-          control={
-            <Select
-              value={hMode}
-              onValueChange={(value) => {
-                if (value) setDraft((current) => ({ ...current, hMode: value }));
-              }}
-            >
-              <SelectTrigger size="compact" className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopup>
-                {H_MODES.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
+          description="Managed by Raven core. Expand Execution at the bottom of the sidebar to choose the H decision loop and per-platform overrides."
+          control={<span className="text-xs text-muted-foreground">Sidebar → Execution</span>}
         />
         <SettingsRow
           {...searchableSetting("raven-model")}
           title="Model"
-          description="Default model for Raven's Holo4 agent."
-          control={
-            <Select
-              value={model}
-              onValueChange={(value) => {
-                if (value) setDraft((current) => ({ ...current, model: value }));
-              }}
-            >
-              <SelectTrigger size="compact" className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopup>
-                {MODELS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
+          description="Choose the Holo model in the sidebar Execution panel. Core saves the next-run default; active runs keep their captured model. No sidecar restart is needed."
+          control={<span className="text-xs text-muted-foreground">Sidebar → Execution</span>}
         />
+      </SettingsSection>
+
+      <SettingsSection title="Machine settings">
         <SettingsRow
           {...searchableSetting("raven-idle-suspend")}
           title="Idle suspend minutes"
@@ -385,7 +335,7 @@ export function RavenSettings() {
             disabled={busy || !settingsDirty}
             onClick={() => saveSettings()}
           >
-            Save settings
+            Save idle setting
           </Button>
         </div>
       </SettingsSection>

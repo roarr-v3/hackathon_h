@@ -4,7 +4,6 @@ to an in-process `Raven` service (`LocalBackend`)."""
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, AsyncIterator
 from urllib.parse import urlencode
@@ -39,15 +38,32 @@ class HttpBackend:
         return await self._json("GET", "/agents")
 
     async def create_run(
-        self, spec: str, platforms: list[str] | None, model: str | None = None, placement: str = "auto"
+        self, spec: str, platforms: list[str] | None, model: str | None = None, placement: str = "auto",
+        execution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return await self._json("POST", "/runs", json={"spec": spec, "platforms": platforms, "placement": placement})
+        return await self._json("POST", "/runs", json={
+            "spec": spec, "platforms": platforms, "placement": placement, "model": model, "execution": execution,
+        })
+
+    async def get_run(self, run_id: str) -> dict[str, Any]:
+        return await self._json("GET", f"/runs/{run_id}")
 
     async def create_agent(
-        self, platform: str, task: str, title: str | None = None, model: str | None = None, placement: str = "auto"
+        self, platform: str, task: str, title: str | None = None, model: str | None = None, placement: str = "auto",
+        repo_path: str | None = None, previous_agent_id: str | None = None,
+        repair: bool = False,
     ) -> dict[str, Any]:
-        body = {"platform": platform, "task": task, "title": title, "placement": placement}
+        body = {
+            "platform": platform, "task": task, "title": title, "placement": placement, "model": model,
+            "repo_path": repo_path, "previous_agent_id": previous_agent_id, "repair": repair,
+        }
         return await self._json("POST", "/agents", json=body)
+
+    async def get_approval(self, agent_id: str, approval_id: str) -> dict[str, Any]:
+        return await self._json("GET", f"/agents/{agent_id}/approvals/{approval_id}")
+
+    async def decide_approval(self, agent_id: str, approval_id: str, option_id: str | None) -> None:
+        await self._json("POST", f"/agents/{agent_id}/approvals/{approval_id}", json={"option_id": option_id})
 
     async def send_message(self, agent_id: str, text: str) -> None:
         await self._json("POST", f"/agents/{agent_id}/messages", json={"text": text})
@@ -93,11 +109,6 @@ class LocalBackend:
     def __init__(self, raven: Any) -> None:
         self.raven = raven
 
-    def _model(self, model: str | None) -> None:
-        # CreateAgentRequest has no model field; the engine reads HAI_MODEL.
-        if model:
-            os.environ["HAI_MODEL"] = model
-
     async def list_specs(self) -> list[dict[str, Any]]:
         return self.raven.list_specs()
 
@@ -105,19 +116,32 @@ class LocalBackend:
         return [a.model_dump(mode="json") for a in self.raven.store.agents.values()]
 
     async def create_run(
-        self, spec: str, platforms: list[str] | None, model: str | None = None, placement: str = "auto"
+        self, spec: str, platforms: list[str] | None, model: str | None = None, placement: str = "auto",
+        execution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        self._model(model)
         plats = [Platform(p) for p in platforms] if platforms else None
-        req = CreateRunRequest(spec=spec, platforms=plats, placement=Placement(placement))
+        req = CreateRunRequest(spec=spec, platforms=plats, placement=Placement(placement), model=model, execution=execution)
         return self.raven.create_run(req).model_dump(mode="json")
 
+    async def get_run(self, run_id: str) -> dict[str, Any]:
+        return self.raven.get_run(run_id).model_dump(mode="json")
+
     async def create_agent(
-        self, platform: str, task: str, title: str | None = None, model: str | None = None, placement: str = "auto"
+        self, platform: str, task: str, title: str | None = None, model: str | None = None, placement: str = "auto",
+        repo_path: str | None = None, previous_agent_id: str | None = None,
+        repair: bool = False,
     ) -> dict[str, Any]:
-        self._model(model)
-        req = CreateAgentRequest(platform=Platform(platform), task=task, title=title, placement=Placement(placement))
+        req = CreateAgentRequest(
+            platform=Platform(platform), task=task, title=title, placement=Placement(placement), model=model,
+            repo_path=repo_path, previous_agent_id=previous_agent_id, repair=repair,
+        )
         return self.raven.start_agent(req).model_dump(mode="json")
+
+    async def get_approval(self, agent_id: str, approval_id: str) -> dict[str, Any]:
+        return self.raven.get_approval(agent_id, approval_id)
+
+    async def decide_approval(self, agent_id: str, approval_id: str, option_id: str | None) -> None:
+        self.raven.decide_approval(agent_id, approval_id, option_id)
 
     async def send_message(self, agent_id: str, text: str) -> None:
         self.raven.send_message(agent_id, text)

@@ -160,9 +160,9 @@ final class DemoEngine {
                              status: AgentStatus = .running, ts: Double) -> Agent {
         let worker: String = {
             switch platform {
-            case .macos: return "cua-lume-macos-15"
-            case .linux: return "cua-docker-ubuntu"
-            case .windows: return "spacesd-home-pc"
+            case .macos: return "this-mac"
+            case .linux: return "raven-linux-apple"
+            case .windows: return "devin-windows-vm"
             case .ios: return "sim-iphone-17"
             }
         }()

@@ -403,6 +403,53 @@ export const DesktopRavenKeyTestResultSchema = Schema.Struct({
 });
 export type DesktopRavenKeyTestResult = typeof DesktopRavenKeyTestResultSchema.Type;
 
+const RavenExecutionModeSchema = Schema.Literals([
+  "auto",
+  "local-runtime",
+  "agents-api",
+  "models-loop",
+]);
+
+export const DesktopRavenExecutionProfileSchema = Schema.Struct({
+  planner: Schema.Literals(["local", "cloud"]),
+  model: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/)),
+  h_mode: RavenExecutionModeSchema,
+  platform_modes: Schema.Struct({
+    macos: Schema.optionalKey(RavenExecutionModeSchema),
+    ios: Schema.optionalKey(RavenExecutionModeSchema),
+    linux: Schema.optionalKey(RavenExecutionModeSchema),
+    windows: Schema.optionalKey(RavenExecutionModeSchema),
+  }),
+  linux_target: Schema.Literals(["apple-container", "devin-vm"]),
+  linux_space: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/)),
+  linux_fallback: Schema.Boolean,
+  windows_target: Schema.Literal("devin-vm"),
+  ios_target: Schema.Literals(["simulator", "device"]),
+  ios_device_id: Schema.NullOr(Schema.String.check(Schema.isPattern(/^[A-Za-z0-9:-]{1,128}$/))),
+});
+export type DesktopRavenExecutionProfile = typeof DesktopRavenExecutionProfileSchema.Type;
+
+export const DesktopRavenExecutionStateSchema = Schema.Struct({
+  profile: DesktopRavenExecutionProfileSchema,
+  targets: Schema.Array(
+    Schema.Struct({
+      platform: Schema.Literals(["macos", "ios", "linux", "windows"]),
+      target: Schema.String,
+      status: Schema.String,
+      detail: Schema.String,
+    }),
+  ),
+});
+export type DesktopRavenExecutionState = typeof DesktopRavenExecutionStateSchema.Type;
+
+export const DesktopRavenExecutionDeviceSchema = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  kind: Schema.Literals(["simulator", "device"]),
+  available: Schema.Boolean,
+});
+export type DesktopRavenExecutionDevice = typeof DesktopRavenExecutionDeviceSchema.Type;
+
 export interface DesktopUpdateActionResult {
   accepted: boolean;
   completed: boolean;
@@ -1211,6 +1258,10 @@ export interface DesktopBridge {
     testKey: (name: DesktopRavenKeyName, value?: string) => Promise<DesktopRavenKeyTestResult>;
     restart: () => Promise<DesktopRavenSettingsState>;
     openLog: () => Promise<boolean>;
+    getExecution: () => Promise<DesktopRavenExecutionState>;
+    saveExecution: (profile: DesktopRavenExecutionProfile) => Promise<DesktopRavenExecutionState>;
+    checkExecution: () => Promise<DesktopRavenExecutionState>;
+    listDevices: () => Promise<ReadonlyArray<DesktopRavenExecutionDevice>>;
   };
   webLinks: {
     setReady: (ready: boolean) => Promise<void>;

@@ -7,6 +7,7 @@ Format:
   setup: {platform: str | [str]} # each command launches the app (see runner.py); prefix "sh:" to run plainly
   agents: [{platform, role?, title?, task, start_delay_s?}]
   timeout_s: int (default 180)
+  attempts: int (default 1, maximum 3; opt in only for repeatable suites)
 
 Template syntax: {{var}}. Builtins: random_word, random_number, timestamp
 (each evaluated once per load_spec so every agent sees the same value).
@@ -17,11 +18,12 @@ from __future__ import annotations
 import random
 import re
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from raven_core.events import Platform
 
@@ -49,7 +51,12 @@ class Spec(BaseModel):
     vars: dict[str, str] = Field(default_factory=dict)
     setup: dict[Platform, list[str]] = Field(default_factory=dict)
     agents: list[SpecAgent] = Field(default_factory=list)
-    timeout_s: int = 180
+    timeout_s: int = Field(default=180, gt=0)
+    attempts: int = Field(default=1, ge=1, le=3)
+    _template: dict | None = PrivateAttr(default=None)
+
+    def rerender(self) -> Spec:
+        return _render_spec(self._template) if self._template is not None else self.model_copy(deep=True)
 
     @property
     def platforms(self) -> list[Platform]:
@@ -133,7 +140,11 @@ def _find(name: str, specs_dir: Path) -> Path:
 
 def load_spec(name: str, specs_dir: Path) -> Spec:
     """Load + render a spec by name (spec `name:` field or file stem)."""
-    data = _read(_find(name, specs_dir))
+    return _render_spec(_read(_find(name, specs_dir)))
+
+
+def _render_spec(template: dict) -> Spec:
+    data = deepcopy(template)
     ctx = _builtins()
     for k, v in (data.get("vars") or {}).items():
         ctx[str(k)] = render(str(v), ctx)
@@ -146,4 +157,6 @@ def load_spec(name: str, specs_dir: Path) -> Spec:
         setup[plat] = [str(c) for c in cmds] if isinstance(cmds, list) else [str(cmds)]
     data["setup"] = setup
     data["description"] = " ".join(str(data.get("description") or "").split())
-    return Spec.model_validate(data)
+    spec = Spec.model_validate(data)
+    spec._template = deepcopy(template)
+    return spec

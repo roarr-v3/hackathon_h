@@ -166,6 +166,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(RavenIpc.testRavenKey);
   yield* ipc.handle(RavenIpc.restartRavenCore);
   yield* ipc.handle(RavenIpc.openRavenCoreLog);
+  yield* ipc.handle(RavenIpc.getRavenExecution);
+  yield* ipc.handle(RavenIpc.saveRavenExecution);
+  yield* ipc.handle(RavenIpc.checkRavenExecution);
+  yield* ipc.handle(RavenIpc.listRavenDevices);
   for (const previewMethod of PreviewIpc.methods) {
     // Explicit types preserve the error/service union of these heterogeneous preview methods.
     yield* ipc.handle<

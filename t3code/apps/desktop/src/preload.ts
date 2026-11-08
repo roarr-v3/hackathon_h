@@ -295,6 +295,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       }),
     restart: () => ipcRenderer.invoke(IpcChannels.RAVEN_RESTART_CHANNEL),
     openLog: () => ipcRenderer.invoke(IpcChannels.RAVEN_OPEN_LOG_CHANNEL),
+    getExecution: () => ipcRenderer.invoke(IpcChannels.RAVEN_GET_EXECUTION_CHANNEL),
+    saveExecution: (profile) =>
+      ipcRenderer.invoke(IpcChannels.RAVEN_SAVE_EXECUTION_CHANNEL, profile),
+    checkExecution: () => ipcRenderer.invoke(IpcChannels.RAVEN_CHECK_EXECUTION_CHANNEL),
+    listDevices: () => ipcRenderer.invoke(IpcChannels.RAVEN_LIST_DEVICES_CHANNEL),
   },
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {

@@ -19,7 +19,10 @@ async def run_agent(agent, worker, emit, inbox, stop, artifacts_dir, **kw: Any) 
     if isinstance(worker, Host):
         from raven_core.engine.h_agent import run_h_agent
 
-        allowed = {k: v for k, v in kw.items() if k in ("timeout_s", "model", "mode", "max_steps")}
+        allowed = {
+            k: v for k, v in kw.items()
+            if k in ("timeout_s", "model", "mode", "max_steps", "request_timeout_s", "request_attempts", "get_stop_reason")
+        }
         return await run_h_agent(agent, worker, emit, inbox, stop, artifacts_dir, **allowed)
     return await run_models_loop(agent, worker, emit, inbox, stop, artifacts_dir, **kw)
 

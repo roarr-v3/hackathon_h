@@ -7,6 +7,7 @@ import base64
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -41,6 +42,10 @@ timeout_s: 30
 class FakeWorker:
     def __init__(self, platform):
         self.name = f"fake-{platform.value}"
+
+
+async def fake_plan_task(task, platform, **kw):
+    return SimpleNamespace(task=task, plan=None, session_id=None)
 
 
 async def fake_run_agent(agent, worker, emit, inbox, stop, artifacts_dir: Path):
@@ -79,6 +84,7 @@ def make_raven(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, token: str | Non
     raven = Raven(settings=settings, store=Store())
     raven.get_worker = lambda platform, name=None: FakeWorker(platform)
     raven.run_agent = fake_run_agent
+    raven.plan_task = fake_plan_task
     return raven
 
 
@@ -156,6 +162,38 @@ def test_stop_agent(client):
     wait_until(lambda: agent_status(client, agent["id"]) == "stopped")
 
 
+def test_agent_budget_and_stop_reason_reach_the_engine(client, raven):
+    seen = {}
+
+    async def run_agent(agent, worker, emit, inbox, stop, artifacts_dir, timeout_s=None):
+        seen["timeout_s"] = timeout_s
+        await stop.wait()
+        emit("agent.verdict", {"passed": False, "reason": f"{stop.reason} while waiting for Holo request #1"})
+        emit("agent.status", {"status": "stopped"})
+
+    raven.run_agent = run_agent
+    agent = client.post("/agents", json={"platform": "linux", "task": "wait", "timeout_s": 75}).json()
+    wait_until(lambda: seen.get("timeout_s") == 75)
+    # what the runner does on an attempt timeout (on the server's loop)
+    raven.store.loop.call_soon_threadsafe(
+        raven.stop_agent, agent["id"], "QA attempt exceeded 155s while waiting for computer use"
+    )
+    wait_until(lambda: agent_status(client, agent["id"]) == "stopped")
+    detail = client.get(f"/agents/{agent['id']}").json()
+    verdict = next(e for e in detail["events"] if e["type"] == "agent.verdict")
+    assert verdict["data"]["reason"] == (
+        "QA attempt exceeded 155s while waiting for computer use while waiting for Holo request #1"
+    )
+
+    # the API's own stop is the user's; the engine without a timeout_s kwarg still works (fake_run_agent)
+    agent = client.post("/agents", json={"platform": "linux", "task": "wait", "timeout_s": 10}).json()
+    wait_until(lambda: agent_status(client, agent["id"]) == "running")
+    assert client.post(f"/agents/{agent['id']}/stop").status_code == 200
+    wait_until(lambda: agent_status(client, agent["id"]) == "stopped")
+    assert raven.store.handles[agent["id"]].stop.reason == "Stopped by user"
+    assert client.post("/agents", json={"platform": "linux", "task": "x", "timeout_s": 0}).status_code == 422
+
+
 def test_not_found(client):
     assert client.get("/agents/nope").status_code == 404
     assert client.post("/agents/nope/stop").status_code == 404
@@ -188,6 +226,10 @@ def test_run_fails_and_reports_without_keys(client, raven):
     assert "macos" in rep["markdown"] and "message never arrived" in rep["markdown"]
     assert rep["linkup_sources"] == [] and rep["devin_session_url"] is None
     assert any(e.type == "report.ready" for e in raven.store.bus.recent())
+    notes = client.get(f"/artifacts/{run['id']}/failure.md")
+    assert notes.status_code == 200
+    assert "message never arrived" in notes.text
+    assert "click" in notes.text
 
 
 def test_run_with_custom_runner_awaiting_start_agent(client, raven):

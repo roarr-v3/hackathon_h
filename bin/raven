@@ -2,9 +2,9 @@
 # Raven everyday launcher.
 #   raven            open Raven Agent (builds it if needed; the app starts and stops raven-core itself)
 #   raven rebuild    rebuild Raven Agent, then open it
-#   raven status     what is running
+#   raven status     app/core status and Cua inventory (not target readiness)
 #   raven stop       stop Raven Agent and raven-core (test machines keep their state)
-# Test machines (Cua Linux/macOS sandboxes, Docker) are started by raven-core when a test needs them.
+# Targets follow core's Execution profile (Windows: Devin VM only); change future runs in its sidebar.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"

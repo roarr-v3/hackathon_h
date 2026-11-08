@@ -5,8 +5,9 @@ machine (Cua Linux container, Cua macOS VM, Windows PC, Devin cloud VM, this Mac
 
     python raven_host.py --task "..." [--mode local-runtime|agents-api] [--model holo4-27b]
 
-Mirrors what H's own `holo` MCP server does (hai_agents_cli/mcp_server.py: run_agent):
-local runtime gets the resolved `h/holo-desktop` spec inline; cloud gets the agent name.
+Both modes pass a resolved inline `h/holo-desktop` spec with an unclaimed
+`user_device` desktop. The official SDK binds its local desktop bridge to this
+session; a catalog name alone must never select an unrelated H cloud desktop.
 
 Protocol with raven-core:
 - stdout: one JSON object per line, {"kind": ..., ...}. Nothing else is printed to stdout.
@@ -18,19 +19,29 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
+import copy
+import io
 import json
 import os
+import platform
+import signal
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
 AGENT = "h/holo-desktop"
+ENV_KEYS = ("HAI_API_KEY", "HAI_MODEL", "HAI_BASE_URL", "HAI_API_BASE_URL")
 
 
 def out(kind: str, **data: Any) -> None:
-    sys.stdout.write(json.dumps({"kind": kind, "ts": time.time(), **data}, default=str) + "\n")
+    text = json.dumps({"kind": kind, "ts": time.time(), **data}, default=str)
+    if secret := os.environ.get("HAI_API_KEY"):
+        text = text.replace(secret, "[redacted]")
+    sys.stdout.write(text + "\n")
     sys.stdout.flush()
 
 
@@ -59,6 +70,95 @@ class Shots:
         self.n += 1
         path.write_bytes(base64.b64decode(src))
         return str(path)
+
+
+def bound_desktop_spec(spec: dict) -> dict:
+    """Bind only the resolved official desktop spec to *this* machine.
+
+    `Client` auto-bridges inline user_device environments with no session_id.
+    Refuse unknown/mixed environments rather than running against another target.
+    """
+    spec = copy.deepcopy(spec)
+    environments = spec.get("environments")
+    if not isinstance(environments, list) or len(environments) != 1:
+        raise ValueError("H desktop spec must contain exactly one resolved desktop environment")
+    env = environments[0]
+    if not isinstance(env, dict) or env.get("kind") != "desktop" or spec.get("subagents"):
+        raise ValueError("H desktop spec is not an exclusively bound desktop agent")
+    env["host"] = "user_device"
+    env.pop("session_id", None)
+    return spec
+
+
+def preflight(mode: str, expected_platform: str | None) -> dict:
+    """No API client, login, model call, runtime download or provisioning."""
+    result: dict[str, Any] = {"ok": False, "system": sys.platform, "arch": platform.machine()}
+    expected = {"linux": "linux", "windows": "win32", "macos": "darwin", "ios": "darwin"}.get(expected_platform)
+    if expected and not sys.platform.startswith(expected):
+        return {**result, "category": "configuration"}
+    try:
+        import hai_agents  # noqa: F401
+        if mode == "local-runtime":
+            from hai_agents_local.runtime.manifest import MANIFEST, platform_key
+
+            try:
+                supported = platform_key() in MANIFEST
+            except RuntimeError:
+                supported = False
+            if not supported:
+                return {**result, "category": "unsupported-runtime"}
+        from hai_drivers.desktop.local import LocalDesktopDriver
+    except (ImportError, SystemExit):
+        return {**result, "category": "dependency"}
+    except Exception:
+        return {**result, "category": "desktop-unavailable"}
+    driver = None
+    try:
+        if sys.platform == "darwin":
+            from hai_agents_local.desktop import ensure_macos_input_permissions
+
+            ensure_macos_input_permissions(prompt=False)
+        driver = LocalDesktopDriver()
+        width, height = driver.get_screen_size()
+        image = driver.screenshot_b64()
+        if not image or width <= 0 or height <= 0:
+            raise RuntimeError("no desktop")
+        return {**result, "ok": True, "width": width, "height": height, "mode": mode}
+    except (Exception, SystemExit):
+        return {**result, "category": "desktop-unavailable"}
+    finally:
+        if driver is not None:
+            driver.close()
+
+
+def native_action(request: dict) -> Any:
+    """A narrow native-driver RPC for the explicitly selected Models fallback."""
+    from hai_drivers.desktop.local import LocalDesktopDriver
+
+    driver = LocalDesktopDriver()
+    try:
+        op = request["operation"]
+        if op == "screenshot":
+            return driver.screenshot_b64()
+        if op == "size":
+            return driver.get_screen_size()
+        if op == "click":
+            return driver.click(int(request["x"]), int(request["y"]), button=request.get("button", "left"))
+        if op == "double_click":
+            return driver.double_click(int(request["x"]), int(request["y"]))
+        if op == "type_text":
+            return driver.write(str(request["text"]))
+        if op == "key":
+            return driver.hotkey(request["keys"])
+        if op == "scroll":
+            driver.mouse_move_to(int(request["x"]), int(request["y"]))
+            for amount, positive, negative in ((int(request["dx"]), "right", "left"), (int(request["dy"]), "down", "up")):
+                if amount:
+                    driver.scroll_by_n_clicks(positive if amount > 0 else negative, abs(amount))
+            return None
+        raise ValueError("unsupported native action")
+    finally:
+        driver.close()
 
 
 def emit_event(ev: Any, shots: Shots) -> None:
@@ -98,33 +198,74 @@ def emit_event(ev: Any, shots: Shots) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--task", required=True)
+    ap.add_argument("--task")
     ap.add_argument("--mode", default=os.environ.get("RAVEN_H_MODE", "local-runtime"),
-                    choices=["local-runtime", "agents-api"])
+                    choices=["local-runtime", "agents-api", "models-loop"])
     ap.add_argument("--model", default=os.environ.get("HAI_MODEL") or None)
     ap.add_argument("--max-steps", type=int, default=60)
     ap.add_argument("--max-time", type=float, default=600)
     ap.add_argument("--shots-dir", default=os.environ.get("RAVEN_SHOTS_DIR", "/tmp/raven-shots"))
     ap.add_argument("--no-cancel-on-eof", dest="cancel_on_eof", action="store_false",
                     help="keep running when stdin closes (manual runs with </dev/null)")
+    ap.add_argument("--preflight", action="store_true", help="check guest capabilities without any API calls")
+    ap.add_argument("--expected-platform", choices=["linux", "windows", "macos", "ios"])
+    ap.add_argument("--driver-json", action="store_true", help="one native-driver command on stdin; no agent decisions")
+    ap.add_argument("--env-stdin", action="store_true", help="read the H environment envelope before steering lines")
     args = ap.parse_args(argv)
+
+    if args.preflight:
+        # Desktop imports sometimes print diagnostics; keep the protocol clean and
+        # return only a safe category, not arbitrary driver exceptions.
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            report = preflight(args.mode, args.expected_platform)
+        print(json.dumps(report), flush=True)
+        return 0 if report["ok"] else 78
+    if args.driver_json:
+        request = json.load(sys.stdin)
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = native_action(request)
+        print(json.dumps({"result": result}), flush=True)
+        return 0
+    if not args.task or args.mode == "models-loop":
+        ap.error("a task and an official H harness mode are required")
+    if args.env_stdin:
+        envelope = json.loads(sys.stdin.readline(65537))
+        if not isinstance(envelope, dict) or set(envelope) - set(ENV_KEYS) or not all(isinstance(v, str) for v in envelope.values()):
+            raise ValueError("invalid H environment envelope")
+        os.environ.update(envelope)
+    args.model = args.model or os.environ.get("HAI_MODEL") or None
+    # Never read holo's stored login or another secret store. Raven supplies env.
+    if not os.environ.get("HAI_API_KEY"):
+        raise RuntimeError("HAI_API_KEY is not configured")
+    os.environ["HAI_AUTO_BRIDGE"] = "1"
+    if base := os.environ.get("HAI_BASE_URL"):
+        os.environ["HAI_API_BASE_URL"] = base
 
     from hai_agents import Client
 
-    shots = Shots(Path(args.shots_dir))
-    cloud = Client()
-    params: dict[str, Any] = {"agent": AGENT, "messages": args.task,
+    shots_dir = Path(args.shots_dir)
+    if args.shots_dir.startswith("/tmp/"):
+        shots_dir = Path(tempfile.gettempdir()) / args.shots_dir.removeprefix("/tmp/")
+    shots = Shots(shots_dir)
+    options: dict[str, Any] = {"api_key": os.environ["HAI_API_KEY"]}
+    if base := os.environ.get("HAI_API_BASE_URL"):
+        options["base_url"] = base
+    cloud = Client(**options)
+    spec = bound_desktop_spec(cloud.agents.get_agent(AGENT, resolve=True).model_dump(mode="json", exclude_none=True))
+    params: dict[str, Any] = {"agent": spec, "messages": args.task,
                               "max_steps": args.max_steps, "max_time_s": args.max_time}
     if args.model:
         params["overrides"] = {"agent.model": args.model}
     if args.mode == "local-runtime":
-        spec = cloud.agents.get_agent(AGENT, resolve=True).model_dump(mode="json", exclude_none=True)
-        params["agent"] = spec
         client = Client.local()
     else:
         client = cloud
 
     handle = client.start_session(**params)
+    if "desktop" not in client.sessions.bridged_kinds(handle.id):
+        handle.cancel()
+        client.close()
+        raise RuntimeError("H session did not bind its desktop bridge to this test machine")
     out("started", session_id=handle.id, mode=args.mode, model=args.model, agent=AGENT)
 
     def steer() -> None:
@@ -134,16 +275,18 @@ def main(argv: list[str] | None = None) -> int:
                     handle.send_message(line.strip())
                     out("steered", text=line.strip())
                 except Exception as e:  # noqa: BLE001
-                    out("error", error=f"steer failed: {e}")
+                    out("error", error=f"steer failed ({type(e).__name__})")
         if args.cancel_on_eof:
-            # raven-core closed our stdin (stop, or its `docker exec` client died): free the H slot.
+            # Raven closed stdin (stop, or the authenticated transport died): free the H slot.
             try:
                 handle.cancel()
             finally:
+                client.close()
                 out("result", status="interrupted", answer=None, outcome=None, error="stopped by raven-core")
                 os._exit(130)
 
     threading.Thread(target=steer, daemon=True).start()
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         for ev in handle.stream(until="terminal"):
             emit_event(ev, shots)
@@ -159,7 +302,16 @@ def main(argv: list[str] | None = None) -> int:
             handle.cancel()
         except Exception:  # noqa: BLE001
             pass
+        client.close()
+        if client is not cloud:
+            cloud.close()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as error:
+        # SDK/transport exceptions can contain headers/URLs. Do not log their body.
+        out("result", status="error", answer=None, outcome=None,
+            error=f"H host execution failed ({type(error).__name__}); no target fallback was attempted")
+        sys.exit(1)

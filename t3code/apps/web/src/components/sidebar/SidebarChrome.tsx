@@ -36,6 +36,7 @@ import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
 import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
+import { RavenExecutionPanel } from "./RavenExecutionPanel";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import { observeResize } from "~/lib/observeResize";
 
@@ -297,6 +298,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter>
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
+      <RavenExecutionPanel />
       <SidebarUtilityMenu />
     </SidebarFooter>
   );

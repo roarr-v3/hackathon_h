@@ -106,6 +106,7 @@ class ScreenWorker:
 class VmWorker:
     def __init__(self, name: str) -> None:
         self.name = name
+        self.target = "apple-container" if name == "raven-linux" else "lume"
 
 
 def test_service_bare_metal_skips_vm_and_takes_turns(monkeypatch, tmp_path: Path):
@@ -137,9 +138,12 @@ def test_service_bare_metal_skips_vm_and_takes_turns(monkeypatch, tmp_path: Path
     monkeypatch.setattr(machines, "show", fake_show)
 
     async def scenario() -> list:
+        from test_server_api import fake_plan_task
+
         raven = Raven(settings=Settings(token=None, artifacts_dir=tmp_path / "a", specs_dir=tmp_path / "s"), store=Store())
         raven.get_worker = get_worker
         raven.run_agent = fake_run_agent
+        raven.plan_task = fake_plan_task
         agents = [
             raven.start_agent(CreateAgentRequest(platform=Platform.macos, task="one")),
             raven.start_agent(CreateAgentRequest(platform=Platform.macos, task="two")),
@@ -183,8 +187,9 @@ def test_show_opens_the_viewer_once(monkeypatch):
     first, again, windows = asyncio.run(scenario())
     assert first == "http://192.168.64.2:3211/viewer/#ticket=t" and again is None and windows is None
     assert opened == [first]
-    assert calls[0][1:] == ("--json", "sb", "view", "raven-mac", "--view-only", "--no-open", "--ttl", "8h")
-    assert said and first in said[0]
+    assert calls[0][1:] == ("--json", "sb", "view", "local:raven-mac", "--view-only", "--no-open", "--ttl", "8h")
+    assert all("ticket=" not in message for message in said)
+    assert said and "raven-mac" in said[0]
 
     monkeypatch.setattr(machines, "_shown", {})
     monkeypatch.setenv("RAVEN_SHOW_VM", "0")

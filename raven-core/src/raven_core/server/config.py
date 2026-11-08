@@ -23,3 +23,12 @@ class Settings:
     run_timeout_s: float = field(
         default_factory=lambda: float(os.environ.get("RAVEN_RUN_TIMEOUT_S") or 900)
     )
+    planning_timeout_s: float = field(
+        default_factory=lambda: float(os.environ.get("RAVEN_PLANNING_TIMEOUT_S") or 90)
+    )
+    prepare_timeout_s: float = field(
+        default_factory=lambda: float(os.environ.get("RAVEN_PREPARE_TIMEOUT_S") or 300)
+    )
+    fix_timeout_s: float = field(
+        default_factory=lambda: float(os.environ.get("RAVEN_FIX_TIMEOUT_S") or 300)
+    )

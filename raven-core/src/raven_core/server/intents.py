@@ -146,7 +146,9 @@ def parse_command(text: str, spec_names: list[str]) -> Intent:
 HELP = """**Raven commands**
 - `run <spec> [on linux,macos,windows]` — run a YAML test suite on several platforms
 - `on <platform>: <task>` — start one computer-use agent (e.g. `on linux: open a terminal and run uname -a`)
+- `retry` — repeat the last QA task with its failure evidence
+- `fix and retry` — request a same-session Devin repair for the last failed free-form task, then repeat its checks
 - `stop` — stop all running agents
 - `specs` — list test suites · `status` — list agents
-- Tests run on this machine when it is the same OS (bare metal); add `in a vm` to use a VM instead (you can watch it live)
+- Select targets in the sidebar Execution panel: native Mac, Device Hub for iOS, Apple Container or Devin for Linux, and Devin for Windows
 Anything else is sent to the running agent (or starts one on the default platform)."""

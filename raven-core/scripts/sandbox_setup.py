@@ -1,166 +1,105 @@
-"""Idempotent sandbox provisioning for Raven (used by setup_sandboxes.sh).
+"""Explicit Raven target preparation. The default command is read-only.
 
-  uv run python scripts/sandbox_setup.py linux        # create raven-linux + install bitchat-tui (+ bitchatx fallback)
-  uv run python scripts/sandbox_setup.py macos        # create raven-mac (Lume VM; first pull ~23 GB)
-  uv run python scripts/sandbox_setup.py windows      # check WINDOWS_WORKER_HOST reachability
-  uv run python scripts/sandbox_setup.py shot linux   # save a screenshot to artifacts/spike-<platform>.png
-  uv run python scripts/sandbox_setup.py smoke linux  # real Holo run: "open a terminal and type echo hello"
+    uv run python scripts/sandbox_setup.py inspect
+    uv run python scripts/sandbox_setup.py linux              # existing Apple Space
+    uv run python scripts/sandbox_setup.py linux --create     # opt-in Apple creation
+    uv run python scripts/sandbox_setup.py macos              # native, never a VM
+    uv run python scripts/sandbox_setup.py macos --vm --create # explicit legacy Lume
+    uv run python scripts/sandbox_setup.py windows            # bounded Devin VM
+    uv run python scripts/sandbox_setup.py shot linux
+    uv run python scripts/sandbox_setup.py smoke linux        # real H session
+
+This script does not install a container engine, delete a machine, silently create
+after connection/auth failure, or install/replace the application under test.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
-import os
-import sys
-import time
+import json
 
-from raven_core.engine.holo import load_env
-from raven_core.env import artifacts_dir
-from raven_core.events import Agent, Event, Platform
-from raven_core.workers.cua import _patch_cua_embedded
-
-_patch_cua_embedded()
-
-LINUX = os.environ.get("RAVEN_LINUX_SANDBOX", "raven-linux")
-MAC = os.environ.get("RAVEN_MACOS_SANDBOX", "raven-mac")
-
-# Everything below runs *inside* the Linux sandbox (Ubuntu 24.04 + XFCE, cua-spacesd).
-LINUX_INSTALL = r"""
-set -e
-SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo -n"
-export DEBIAN_FRONTEND=noninteractive
-if ! command -v cc >/dev/null || ! dpkg -s libdbus-1-dev >/dev/null 2>&1; then
-  $SUDO apt-get update -y
-  $SUDO apt-get install -y --no-install-recommends build-essential pkg-config libdbus-1-dev libssl-dev \
-      curl git ca-certificates xdotool xfce4-terminal
-fi
-if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
-  curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-fi
-. "$HOME/.cargo/env"
-if ! command -v bitchat-tui >/dev/null; then
-  cargo install --locked --git https://github.com/E8EgsqUO/bitchat-tui bitchat-tui \
-    || cargo install --git https://github.com/E8EgsqUO/bitchat-tui \
-    || cargo install bitchat-tui
-  $SUDO ln -sf "$HOME/.cargo/bin/bitchat-tui" /usr/local/bin/bitchat-tui
-fi
-if ! command -v bitchatx >/dev/null; then
-  (cargo install --locked --git https://github.com/derekross/bitchatx \
-     && $SUDO ln -sf "$HOME/.cargo/bin/bitchatx" /usr/local/bin/bitchatx) || echo "bitchatx fallback failed (non-fatal)"
-fi
-echo RAVEN_INSTALL_OK
-"""
+from raven_core.env import artifacts_dir, load_env
+from raven_core.events import Agent, Event, ExecutionProfile, HMode, Placement, Platform
+from raven_core.workers import get_worker, inspect_targets, prepare_worker
 
 
-async def _run_long(sb, script: str, label: str, timeout_s: int = 3600) -> bool:
-    """Run a long script in the background inside the guest and poll a sentinel (shell.run caps timeouts)."""
-    log = f"/tmp/raven-{label}.log"
-    done = f"/tmp/raven-{label}.done"
-    await sb.shell.run(f"cat > /tmp/raven-{label}.sh <<'RAVEN_EOF'\n{script}\nRAVEN_EOF")
-    await sb.shell.run(f"rm -f {done}; (bash /tmp/raven-{label}.sh > {log} 2>&1; echo $? > {done}) &", background=True)
-    t0 = time.time()
-    while time.time() - t0 < timeout_s:
-        r = await sb.shell.run(f"cat {done} 2>/dev/null; tail -n 2 {log} 2>/dev/null")
-        lines = r.stdout.strip().splitlines()
-        if lines and lines[0].strip().isdigit():
-            ok = lines[0].strip() == "0"
-            print(f"[{label}] finished rc={lines[0].strip()}")
-            print((await sb.shell.run(f"tail -n 30 {log}")).stdout)
-            return ok
-        print(f"[{label}] {int(time.time() - t0)}s … {lines[-1] if lines else ''}"[:160], flush=True)
-        await asyncio.sleep(15)
-    print(f"[{label}] timed out")
-    return False
-
-
-async def _connect_or_create(name: str, image, **kw):
-    from cua_sandbox import Sandbox
-
-    try:
-        sb = await asyncio.wait_for(_aw(Sandbox.connect(name)), 60)
-        await sb.shell.run("true")
-        print(f"[{name}] already exists")
-        return sb
-    except Exception as e:  # noqa: BLE001
-        print(f"[{name}] not reachable ({type(e).__name__}); creating…")
-    return await Sandbox.create(image, name=name, **kw)
-
-
-async def _aw(x):
-    return await x
-
-
-async def linux() -> None:
-    from cua_sandbox import Image
-
-    sb = await _connect_or_create(LINUX, Image.linux())
-    r = await sb.shell.run("command -v bitchat-tui && command -v bitchatx; echo; uname -a")
-    print(r.stdout)
-    if "bitchat-tui" not in r.stdout:
-        ok = await _run_long(sb, LINUX_INSTALL, "install")
-        if not ok:
-            sys.exit("linux install failed; see log above")
-    await sb.disconnect()
-
-
-async def macos() -> None:
-    from cua_sandbox import Image
-
-    sb = await _connect_or_create(MAC, Image.macos(), runtime="lume")
-    print((await sb.shell.run("sw_vers; ls /Applications | head -50")).stdout)
-    await sb.disconnect()
-
-
-async def windows() -> None:
-    from raven_core.workers import get_worker
-
-    w = get_worker(Platform.windows)
-    rc, out, err = await w.shell("ver")
-    print(rc, out, err)
-    print("screen", await w.size())
-
-
-async def shot(platform: str) -> None:
-    from raven_core.workers import get_worker
-
-    w = get_worker(Platform(platform))
-    png = await w.screenshot()
-    artifacts = artifacts_dir()
-    artifacts.mkdir(exist_ok=True)
-    p = artifacts / f"spike-{platform}.png"
-    p.write_bytes(png)
-    print("wrote", p, len(png), "bytes")
-
-
-async def smoke(platform: str) -> None:
-    from raven_core.engine import run_agent
-    from raven_core.workers import get_worker
-
-    agent = Agent(platform=Platform(platform), worker=platform, title="smoke", task="Open a terminal and type `echo hello`, press Enter, and verify 'hello' is printed.")
-
-    async def emit(e: Event) -> None:
-        print(e.type, {k: v for k, v in e.data.items()})
-
-    await run_agent(
-        agent,
-        get_worker(Platform(platform)),
-        emit,
-        asyncio.Queue(),
-        asyncio.Event(),
-        artifacts_dir(),
-        timeout_s=300,
-        max_steps=20,
+async def run(args: argparse.Namespace) -> None:
+    profile = ExecutionProfile(
+        h_mode=HMode(args.mode), linux_space=args.space, linux_fallback=not args.no_fallback,
     )
-    print("RESULT", agent.status, agent.verdict_reason)
+    if args.command == "inspect":
+        print(json.dumps(await inspect_targets(profile), indent=2))
+        return
+    platform = Platform(args.platform if args.command in ("shot", "smoke") else args.command)
+    if args.vm and platform != Platform.macos:
+        raise ValueError("--vm is only the explicit legacy macOS Lume route")
+    if args.create and platform != Platform.linux and not (platform == Platform.macos and args.vm):
+        raise ValueError("--create is only for a local Apple Space or explicit macOS Lume VM")
+
+    async def say(text: str) -> None:
+        print(text, flush=True)
+
+    if args.vm:
+        from raven_core.hosts.cua import CuaHost
+
+        worker = CuaHost(platform, args.mac_space, mode=profile.mode_for(platform))
+    else:
+        worker = get_worker(platform, placement=Placement.auto, execution=profile)
+    if args.create:
+        from raven_core.machines import ensure_space
+
+        await ensure_space(platform, worker.name, say, create=True)
+    worker = await prepare_worker(worker, execution=profile, say=say)
+    try:
+        if args.command == "shot":
+            png = await worker.screenshot()
+            folder = artifacts_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / f"spike-{platform.value}.png"
+            path.write_bytes(png)
+            print("wrote", path, len(png), "bytes")
+        elif args.command == "smoke":
+            from raven_core.engine import run_agent
+            from raven_core.hosts import Host
+
+            agent = Agent(
+                platform=platform, worker=worker.name, execution=profile, title="smoke",
+                task="Inspect the desktop, open a terminal, type `echo hello`, press Enter and verify hello is visible.",
+            )
+
+            async def emit(event: Event) -> None:
+                print(event.type, event.data)
+
+            options = {"mode": profile.mode_for(platform).value} if isinstance(worker, Host) else {}
+            await run_agent(
+                agent, worker, emit, asyncio.Queue(), asyncio.Event(), artifacts_dir(),
+                timeout_s=300, max_steps=20, **options,
+            )
+            print("RESULT", agent.status, agent.verdict_reason)
+        else:
+            print(f"Prepared {platform.value}: {worker.name}")
+    finally:
+        # Disconnect only; Devin archives owned sessions to avoid leaving a paid VM
+        # running. Explicitly attached sessions and local Spaces are never deleted.
+        await worker.close()
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command", nargs="?", default="inspect", choices=["inspect", "linux", "macos", "windows", "ios", "shot", "smoke"])
+    parser.add_argument("platform", nargs="?", choices=[p.value for p in Platform])
+    parser.add_argument("--mode", choices=[m.value for m in HMode], default="auto")
+    parser.add_argument("--space", default="raven-linux-apple")
+    parser.add_argument("--mac-space", default="raven-mac")
+    parser.add_argument("--no-fallback", action="store_true")
+    parser.add_argument("--create", action="store_true", help="explicit creation, never used by inspection or failed connection recovery")
+    parser.add_argument("--vm", action="store_true")
+    args = parser.parse_args()
+    if args.command in ("shot", "smoke") and not args.platform:
+        parser.error("shot/smoke needs a platform")
     load_env()
-    if len(sys.argv) < 2:
-        sys.exit(__doc__)
-    cmd, *rest = sys.argv[1:]
-    fn = {"linux": linux, "macos": macos, "windows": windows, "shot": shot, "smoke": smoke}[cmd]
-    asyncio.run(fn(*rest))
+    asyncio.run(run(args))
 
 
 if __name__ == "__main__":

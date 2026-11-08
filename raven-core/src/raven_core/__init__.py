@@ -20,7 +20,7 @@ def _setup_logging() -> None:
         stream=sys.stderr,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    for noisy in ("httpx", "httpcore", "websockets"):
+    for noisy in ("httpx", "httpx2", "httpcore", "websockets"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 

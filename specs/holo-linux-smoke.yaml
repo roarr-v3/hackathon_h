@@ -1,0 +1,27 @@
+name: holo-linux-smoke
+description: Drive a real Linux desktop with Holo and verify keyboard input and on-screen evidence.
+vars:
+  code: "{{random_number}}"
+setup:
+  linux:
+    - "sh:command -v xfce4-terminal && command -v setsid"
+    - >-
+      printf '\nRaven QA {{code}}\nEnter the code and press Enter: ';
+      read -r input;
+      if [ "$input" = "{{code}}" ]; then
+        printf '\nRAVEN INPUT OK {{code}}\n';
+      else
+        printf '\nRAVEN INPUT FAILED {{code}}\n';
+      fi;
+      sleep 120; exit
+agents:
+  - platform: linux
+    title: Linux desktop input smoke test
+    task: >-
+      Find and focus the terminal displaying "Raven QA {{code}}". At the prompt,
+      type {{code}} once and press Enter. Inspect the result in that same terminal.
+      Pass only if "RAVEN INPUT OK {{code}}" is visible. If "RAVEN INPUT FAILED {{code}}"
+      is visible, fail and quote it. If the terminal or keyboard is unavailable,
+      report the blocker. Use the visible desktop and keyboard for the whole test.
+attempts: 2
+timeout_s: 75

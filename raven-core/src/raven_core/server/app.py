@@ -14,10 +14,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from raven_core.events import (
+    ApprovalDecision,
     Agent,
     CreateAgentRequest,
     CreateRunRequest,
     Event,
+    ExecutionProfile,
     Run,
     SendMessageRequest,
     VoiceSession,
@@ -90,6 +92,41 @@ def create_app(raven: Raven | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="pairing details are only served to this machine")
         return {"token": settings.token, "urls": await asyncio.to_thread(pairing_urls, settings.port)}
 
+    @app.get("/execution", dependencies=A)
+    async def execution_settings() -> dict[str, Any]:
+        try:
+            return await raven.execution_state()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.put("/execution", dependencies=A)
+    async def save_execution_settings(profile: ExecutionProfile) -> dict[str, Any]:
+        try:
+            return await raven.save_execution(profile)
+        except OSError as error:
+            raise HTTPException(status_code=503, detail="Could not persist execution settings") from error
+
+    @app.post("/execution/check", dependencies=A)
+    async def check_execution_targets() -> dict[str, Any]:
+        try:
+            return await raven.execution_state(check=True)
+        except TimeoutError as error:
+            raise HTTPException(status_code=504, detail="Target readiness check timed out") from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/execution/devices", dependencies=A)
+    async def execution_devices() -> list[dict[str, Any]]:
+        from raven_core.workers.base import WorkerUnavailable
+        from raven_core.workers.device_hub import list_devices
+
+        try:
+            return await asyncio.wait_for(list_devices(), timeout=30)
+        except TimeoutError as error:
+            raise HTTPException(status_code=504, detail="Device discovery timed out") from error
+        except WorkerUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
     # ---------------------------------------------------------------- agents
     @app.get("/agents", dependencies=A, response_model=list[Agent])
     async def list_agents() -> list[Agent]:
@@ -97,7 +134,7 @@ def create_app(raven: Raven | None = None) -> FastAPI:
 
     @app.post("/agents", dependencies=A, response_model=Agent)
     async def create_agent(req: CreateAgentRequest) -> Agent:
-        return raven.start_agent(req)
+        return nf(raven.start_agent, req)
 
     @app.get("/agents/{agent_id}", dependencies=A)
     async def get_agent(agent_id: str) -> dict[str, Any]:
@@ -116,6 +153,18 @@ def create_app(raven: Raven | None = None) -> FastAPI:
     @app.post("/agents/{agent_id}/stop", dependencies=A, response_model=Agent)
     async def stop_agent(agent_id: str) -> Agent:
         return nf(raven.stop_agent, agent_id)
+
+    @app.get("/agents/{agent_id}/approvals/{approval_id}", dependencies=A)
+    async def get_approval(agent_id: str, approval_id: str) -> dict[str, Any]:
+        return nf(raven.get_approval, agent_id, approval_id)
+
+    @app.post("/agents/{agent_id}/approvals/{approval_id}", dependencies=A)
+    async def decide_approval(agent_id: str, approval_id: str, req: ApprovalDecision) -> dict[str, bool]:
+        try:
+            nf(raven.decide_approval, agent_id, approval_id, req.option_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {"ok": True}
 
     @app.post("/stop", dependencies=A)
     async def stop_everything() -> dict[str, Any]:

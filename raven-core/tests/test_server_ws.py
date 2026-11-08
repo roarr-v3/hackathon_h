@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -32,6 +33,11 @@ def make_raven(tmp_path, monkeypatch) -> Raven:
     )
     raven.get_worker = lambda platform, name=None: FakeWorker()
     raven.run_agent = quick_agent
+
+    async def planner(task, platform, **kwargs):
+        return SimpleNamespace(task=task, plan=None, session_id=None)
+
+    raven.plan_task = planner
     return raven
 
 
@@ -74,6 +80,11 @@ def test_ws_replay_and_live(tmp_path, monkeypatch):
         with client.websocket_connect(f"/ws/events?agent_id={a2['id']}") as ws:
             first = ws.receive_json()
             assert first["agent_id"] == a2["id"] and first["type"] == "agent.created"
-            types = [first["type"]] + [ws.receive_json()["type"] for _ in range(4)]
-            assert types[-1] == "agent.status"
-            assert "agent.verdict" in types
+            replay = [first]
+            while not (
+                replay[-1]["type"] == "agent.status"
+                and replay[-1]["data"].get("status") == "passed"
+            ):
+                replay.append(ws.receive_json())
+            assert all(event["agent_id"] == a2["id"] for event in replay)
+            assert any(event["type"] == "agent.verdict" for event in replay)

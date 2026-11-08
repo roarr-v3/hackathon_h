@@ -325,9 +325,10 @@ class Renderer:
             if self.follow_run and ev.get("run_id") == self.follow_run and st in RUN_TERMINAL:
                 self.run_status = st
                 self.close_all()
-                n_pass = sum(1 for a in self.agents.values() if a.get("status") == "passed")
+                platforms = {a.get("platform") for a in self.agents.values()}
+                passed = {a.get("platform") for a in self.agents.values() if a.get("status") == "passed"}
                 icon = {"passed": "✅", "failed": "❌", "stopped": "⏹"}[st]
-                self.say(f"{icon} **Run {st}** — {n_pass}/{len(self.agents)} platforms passed.\n\n")
+                self.say(f"{icon} **Run {st}** — {len(passed)}/{len(platforms)} platforms recorded a pass.\n\n")
                 if st != "failed":
                     self.done = True
                 else:
@@ -580,6 +581,7 @@ class RavenAcpAgent:
         specs = await b.list_specs()
         names = [x["name"] for x in specs if x.get("name")]
         intent = parse_command(text, names)
+        repair = low in ("fix and retry", "fix and rerun", "repair and retry")
 
         if intent.kind == "specs":
             lines = [f"- **{x['name']}** ({', '.join(x.get('platforms') or [])}) — {x.get('description', '')}" for x in specs]
@@ -598,12 +600,28 @@ class RavenAcpAgent:
             plats = [p.value for p in intent.platforms] if intent.platforms else None
             run = await b.create_run(intent.spec, plats, model=s.model, placement=intent.placement.value)
             s.run_ids.append(run["id"])
+            s.last = None
             self._say(s, f"🧪 Running **{run['spec']}** on {', '.join(run['platforms'])} (`{run['id']}`)\n\n")
             return await self._follow(s, run_id=run["id"])
+        if RETRY_RE.fullmatch(text.strip()) and s.last is None and s.run_ids:
+            previous = await b.get_run(s.run_ids[-1])
+            run = await b.create_run(
+                previous["spec"], previous["platforms"], execution=previous.get("execution"),
+            )
+            s.run_ids.append(run["id"])
+            self._say(s, f"🧪 Repeating **{run['spec']}** with its captured execution profile (`{run['id']}`).\n\n")
+            return await self._follow(s, run_id=run["id"])
 
-        platform, task, placement = self.agent_request(s, text, intent)
+        if repair and (s.last is None or not s.agent_ids):
+            self._say(s, "Start a free-form QA task first. A repair resumes that task's Devin session and preserves its checks.")
+            return "end_turn"
+        platform, task, placement = s.last if repair else self.agent_request(s, text, intent)
         s.last = (platform, task, placement)
-        agent = await b.create_agent(platform, task, model=s.model, placement=placement)
+        previous = s.agent_ids[-1] if s.agent_ids and (repair or RETRY_RE.fullmatch(text.strip())) else None
+        agent = await b.create_agent(
+            platform, task, model=s.model, placement=placement, repo_path=s.cwd or None,
+            previous_agent_id=previous, repair=repair,
+        )
         s.agent_ids.append(agent["id"])
         return await self._follow(s, agent_id=agent["id"])
 
@@ -647,13 +665,25 @@ class RavenAcpAgent:
             await asyncio.wait({consume}, timeout=3)
             r.close_all("failed")
             return "cancelled"
+        except asyncio.CancelledError:
+            try:
+                async with asyncio.timeout(3):
+                    if run_id:
+                        await b.stop_run(run_id)
+                    elif agent_id:
+                        await b.stop_agent(agent_id)
+            except Exception:
+                log.warning("Could not confirm stop after ACP disconnect")
+            raise
         finally:
             for t in (consume, cancelled):
                 if not t.done():
                     t.cancel()
+            await asyncio.gather(consume, cancelled, return_exceptions=True)
 
     async def _consume(self, b: Any, r: Renderer, run_id: str | None, agent_id: str | None) -> None:
         it = b.events(run_id=run_id, agent_id=agent_id).__aiter__()
+        approvals: dict[str, asyncio.Task[None]] = {}
         try:
             while not r.done:
                 timeout = REPORT_WAIT_S if r.run_status == "failed" and not r.report_seen else None
@@ -665,13 +695,42 @@ class RavenAcpAgent:
                     r.say("_No failure report arrived (Linkup/Devin keys missing or slow)._\n\n")
                     return
                 await r.handle(ev)
+                data = ev.get("data") or {}
+                if data.get("phase") == "approval" and data.get("state") == "pending" and ev.get("agent_id"):
+                    approval_id = data.get("approval_id")
+                    if approval_id not in approvals:
+                        approvals[approval_id] = asyncio.create_task(self._approve(b, r, ev["agent_id"], approval_id))
+                elif data.get("phase") == "approval" and data.get("state") == "closed":
+                    pending = approvals.pop(data.get("approval_id"), None)
+                    if pending:
+                        pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
         finally:
+            for pending in approvals.values():
+                pending.cancel()
+            await asyncio.gather(*approvals.values(), return_exceptions=True)
             aclose = getattr(it, "aclose", None)
             if aclose is not None:
                 try:
                     await aclose()
                 except Exception:
                     pass
+
+    async def _approve(self, backend: Any, renderer: Renderer, agent_id: str, approval_id: str) -> None:
+        try:
+            operation = await backend.get_approval(agent_id, approval_id)
+        except Exception:
+            return
+        try:
+            response = await self.conn.request("session/request_permission", {**operation, "sessionId": renderer.sid})
+            outcome = response.get("outcome") if isinstance(response, dict) else None
+            selected = outcome.get("optionId") if isinstance(outcome, dict) and outcome.get("outcome") == "selected" else None
+        except RpcError:
+            selected = None
+        try:
+            await backend.decide_approval(agent_id, approval_id, selected)
+        except Exception:
+            renderer.say("The repair permission request could not be completed; no new operation was approved.\n\n")
 
 
 async def serve_stdio() -> None:

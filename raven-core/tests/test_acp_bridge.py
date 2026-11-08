@@ -49,7 +49,8 @@ def test_acp_stdio_handshake_and_help(tmp_path):
         for line in proc.stdout:  # type: ignore[union-attr]
             lines.put(line)
 
-    threading.Thread(target=pump, daemon=True).start()
+    reader = threading.Thread(target=pump, daemon=True)
+    reader.start()
     received: list[dict] = []
 
     def send(obj):
@@ -104,6 +105,9 @@ def test_acp_stdio_handshake_and_help(tmp_path):
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+            proc.wait(timeout=10)
+        reader.join(timeout=2)
+        proc.stdout.close()  # type: ignore[union-attr]
 
 
 def test_threads_resume_after_an_app_restart(monkeypatch):
@@ -178,7 +182,7 @@ def req(agent: RavenAcpAgent, id_, method, params):
 
 def test_acp_agent_turn_run_turn_and_cancel(tmp_path, monkeypatch):
     raven = make_raven(tmp_path, monkeypatch)
-    monkeypatch.setenv("HAI_MODEL", "holo4-27b")  # LocalBackend writes HAI_MODEL; restore after
+    monkeypatch.setenv("HAI_MODEL", "holo4-27b")
 
     async def scenario():
         raven.store.bind_loop(asyncio.get_running_loop())
@@ -210,6 +214,14 @@ def test_acp_agent_turn_run_turn_and_cancel(tmp_path, monkeypatch):
         text = client.text()
         assert "Run failed" in text and "FAILED" in text and "Raven report" in text
         assert client.updates("plan")
+
+        previous_runs = set(raven.store.runs)
+        previous = next(reversed(raven.store.runs.values()))
+        req(acp, 40, "session/prompt", {"sessionId": sid, "prompt": [{"type": "text", "text": "retry"}]})
+        assert (await client.response(40))["result"]["stopReason"] == "end_turn"
+        repeated = next(run for key, run in raven.store.runs.items() if key not in previous_runs)
+        assert repeated.spec == previous.spec and repeated.execution == previous.execution
+        assert all(agent.original_task != "retry" for agent in raven.store.agents.values())
 
         # --- cancel
         client.msgs.clear()
@@ -246,6 +258,78 @@ def test_prompt_text_strips_client_instruction_blocks():
         "User message:\non this mac open TextEdit and type bonjour, ça va ?"
     )
     assert RavenAcpAgent.prompt_text([{"type": "text", "text": handoff}]) == "on this mac open TextEdit and type bonjour, ça va ?"
+
+
+def test_jsonrpc_permission_response_and_cancellation():
+    from raven_core.acp.jsonrpc import Connection
+
+    async def scenario():
+        outbound = asyncio.Queue()
+
+        async def unexpected_handler(*args):
+            raise AssertionError("A response must not be dispatched as a new request")
+
+        connection = Connection(lambda raw: outbound.put_nowait(json.loads(raw)), unexpected_handler)
+        pending = asyncio.create_task(connection.request("session/request_permission", {"sessionId": "thread"}))
+        request = await outbound.get()
+        answer = {"outcome": {"outcome": "selected", "optionId": "allow-once"}}
+        connection.feed(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": answer}))
+        assert await pending == answer
+        assert not connection._requests
+        pending = asyncio.create_task(connection.request("session/request_permission", {"sessionId": "thread"}))
+        request = await outbound.get()
+        connection.cancel_all()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+        connection.feed(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": answer}))
+        assert not connection._requests
+
+    asyncio.run(scenario())
+
+
+def test_repair_deadline_closes_pending_acp_permission_without_hanging():
+    from raven_core.acp.agent import Renderer
+
+    async def scenario():
+        requested = asyncio.Event()
+        messages = []
+
+        def write(raw):
+            message = json.loads(raw)
+            messages.append(message)
+            if message.get("method") == "session/request_permission":
+                requested.set()
+
+        class Backend:
+            async def events(self, **kw):
+                yield {"id": "pending", "type": "agent.message", "agent_id": "agt", "data": {
+                    "phase": "approval", "state": "pending", "approval_id": "approval",
+                }}
+                await requested.wait()
+                yield {"id": "closed", "type": "agent.message", "agent_id": "agt", "data": {
+                    "phase": "approval", "state": "closed", "approval_id": "approval",
+                }}
+                yield {"id": "finished", "type": "agent.status", "agent_id": "agt", "data": {"status": "error"}}
+
+            async def get_approval(self, *args):
+                return {"toolCall": {"toolCallId": "edit"}, "options": []}
+
+            async def decide_approval(self, *args):
+                raise AssertionError("An expired permission must never authorize an operation")
+
+        backend = Backend()
+        acp = RavenAcpAgent(write, backend=backend)
+        renderer = Renderer(acp, "thread", follow_agent="agt", follow_run=None)
+        await asyncio.wait_for(acp._consume(backend, renderer, None, "agt"), 1)
+        assert renderer.done and not acp.conn._requests
+        permission = next(message for message in messages if message.get("method") == "session/request_permission")
+        acp.conn.feed(json.dumps({
+            "jsonrpc": "2.0", "id": permission["id"],
+            "result": {"outcome": {"outcome": "selected", "optionId": "allow-once"}},
+        }))
+        assert not acp.conn._requests
+
+    asyncio.run(scenario())
 
 
 def test_action_titles():

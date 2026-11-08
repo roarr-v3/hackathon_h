@@ -12,7 +12,7 @@ import platform as _platform
 import re
 import sys
 
-from raven_core.events import Placement, Platform
+from raven_core.events import ExecutionProfile, Placement, Platform
 from raven_core.workers.base import WorkerUnavailable
 
 _VM_RE = re.compile(
@@ -52,7 +52,9 @@ def requested(text: str | None) -> Placement:
 
 def can_run_bare_metal(platform: Platform) -> bool:
     host = host_platform()
-    return Platform(platform) == host or (Platform(platform) == Platform.ios and host == Platform.macos)
+    return platform != Platform.windows and (
+        Platform(platform) == host or (Platform(platform) == Platform.ios and host == Platform.macos)
+    )
 
 
 def default_placement() -> Placement:
@@ -62,9 +64,21 @@ def default_placement() -> Placement:
         return Placement.auto
 
 
-def resolve(platform: Platform, wanted: Placement | str = Placement.auto) -> Placement:
+def resolve(
+    platform: Platform,
+    wanted: Placement | str = Placement.auto,
+    execution: ExecutionProfile | None = None,
+) -> Placement:
     """bare-metal or vm for this agent; raises when bare metal is demanded for another OS."""
     platform, wanted = Platform(platform), Placement(wanted)
+    if execution is not None:
+        # Profiles are explicit, not hints from a prompt or an old RAVEN_PLACEMENT.
+        # Native Mac/DeviceHub must never secretly use a VM.
+        if platform in (Platform.macos, Platform.ios):
+            if host_platform() != Platform.macos:
+                raise WorkerUnavailable(f"{platform.value} requires a native Mac for this execution profile")
+            return Placement.bare_metal
+        return Placement.vm
     if wanted == Placement.auto:
         wanted = default_placement()
     if wanted == Placement.vm:

@@ -1,4 +1,7 @@
 import {
+  DesktopRavenExecutionDeviceSchema,
+  DesktopRavenExecutionProfileSchema,
+  DesktopRavenExecutionStateSchema,
   DesktopRavenKeyNameSchema,
   DesktopRavenKeyTestResultSchema,
   DesktopRavenSettingsSaveInputSchema,
@@ -60,5 +63,41 @@ export const openRavenCoreLog = makeIpcMethod({
   handler: Effect.fn("desktop.ipc.raven.openLog")(function* () {
     const state = yield* (yield* RavenSettings.RavenSettings).get;
     return yield* ElectronShell.openPath(state.status.logPath);
+  }),
+});
+
+export const getRavenExecution = makeIpcMethod({
+  channel: IpcChannels.RAVEN_GET_EXECUTION_CHANNEL,
+  payload: Schema.Void,
+  result: DesktopRavenExecutionStateSchema,
+  handler: Effect.fn("desktop.ipc.raven.getExecution")(function* () {
+    return yield* (yield* RavenSettings.RavenSettings).getExecution;
+  }),
+});
+
+export const saveRavenExecution = makeIpcMethod({
+  channel: IpcChannels.RAVEN_SAVE_EXECUTION_CHANNEL,
+  payload: DesktopRavenExecutionProfileSchema,
+  result: DesktopRavenExecutionStateSchema,
+  handler: Effect.fn("desktop.ipc.raven.saveExecution")(function* (profile) {
+    return yield* (yield* RavenSettings.RavenSettings).saveExecution(profile);
+  }),
+});
+
+export const checkRavenExecution = makeIpcMethod({
+  channel: IpcChannels.RAVEN_CHECK_EXECUTION_CHANNEL,
+  payload: Schema.Void,
+  result: DesktopRavenExecutionStateSchema,
+  handler: Effect.fn("desktop.ipc.raven.checkExecution")(function* () {
+    return yield* (yield* RavenSettings.RavenSettings).checkExecution;
+  }),
+});
+
+export const listRavenDevices = makeIpcMethod({
+  channel: IpcChannels.RAVEN_LIST_DEVICES_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Array(DesktopRavenExecutionDeviceSchema),
+  handler: Effect.fn("desktop.ipc.raven.listDevices")(function* () {
+    return yield* (yield* RavenSettings.RavenSettings).listDevices;
   }),
 });
