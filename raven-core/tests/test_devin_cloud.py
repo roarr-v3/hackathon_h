@@ -38,7 +38,7 @@ def output(driver="h", verdict="PASSED"):
             "steps": ["Opened app", "Verified screen"]}
 
 
-def execute(tmp_path, monkeypatch, handler, task="## Setup\nReady\n## Task\nVerify"):
+def execute(tmp_path, monkeypatch, handler, task="## Setup\nReady\n## Task\nVerify", steer=None):
     monkeypatch.setattr(integrations, "TRANSPORT", httpx.MockTransport(handler))
     events = []
 
@@ -47,7 +47,11 @@ def execute(tmp_path, monkeypatch, handler, task="## Setup\nReady\n## Task\nVeri
 
     async def main():
         agent = Agent(platform=Platform.linux, worker="cloud", title="QA", task=task)
-        await run_agent(agent, get_host(Platform.linux), emit, asyncio.Queue(), asyncio.Event(), tmp_path)
+        inbox = asyncio.Queue()
+        if steer is not None:
+            for text in steer:
+                inbox.put_nowait(text)
+        await run_agent(agent, get_host(Platform.linux), emit, inbox, asyncio.Event(), tmp_path)
         return agent
 
     return asyncio.run(main()), events
@@ -321,3 +325,28 @@ def test_cloud_sender_preserves_start_gate(monkeypatch, cloud, delay, expected):
     asyncio.run(run_spec(spec, None, start, run, poll_s=0.001))
     assert run.status == "passed"
     assert sleeps == ([expected] if expected else [])
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_cloud_steering_is_forwarded_and_redacted(tmp_path, monkeypatch, cloud, fail):
+    messages = []
+    secret = 'private-h-key-"quoted'
+
+    def handler(request):
+        if request.url.path.endswith("/messages"):
+            assert request.method == "POST"
+            messages.append(json.loads(request.content)["message"])
+            return httpx.Response(401, text=secret) if fail else httpx.Response(204)
+        if request.method == "POST":
+            return httpx.Response(200, json={"session_id": "devin-test"})
+        if not messages:
+            return httpx.Response(200, json={"status": "running"})
+        return httpx.Response(200, json={"structured_output": output()})
+
+    monkeypatch.setenv("RAVEN_DEVIN_TIMEOUT_S", "0.2")
+    agent, events = execute(tmp_path, monkeypatch, handler, steer=["continue " + secret, "verify again"])
+    assert messages == ["continue [REDACTED]", "verify again"]
+    assert agent.status == AgentStatus.passed
+    text = " ".join(e.data.get("text", "") for e in events)
+    assert secret not in text
+    assert ("Cloud steering failed" if fail else "Steering sent to Devin cloud") in text

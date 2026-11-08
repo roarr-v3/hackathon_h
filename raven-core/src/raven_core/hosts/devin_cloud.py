@@ -47,7 +47,9 @@ class DevinCloudHost(Host):
         if not os.environ.get("DEVIN_API_KEY") or not os.environ.get("DEVIN_ORG_ID"):
             raise WorkerUnavailable("devin-cloud requires DEVIN_API_KEY and DEVIN_ORG_ID")
 
-    async def run(self, agent: Agent, emit: Callable[[Event], Awaitable[None]], stop: asyncio.Event) -> None:
+    async def run(
+        self, agent: Agent, emit: Callable[[Event], Awaitable[None]], inbox: asyncio.Queue[str], stop: asyncio.Event
+    ) -> None:
         secrets = {k: os.environ[k] for k in (*PASS_ENV, "DEVIN_API_KEY") if os.environ.get(k)}
 
         def clean(text: str) -> str:
@@ -80,6 +82,7 @@ class DevinCloudHost(Host):
             await send("agent.verdict", {"passed": value == AgentStatus.passed, "reason": reason})
             await status(value)
 
+        steering = None
         await status(AgentStatus.running)
         try:
             key, org = os.environ.get("DEVIN_API_KEY"), os.environ.get("DEVIN_ORG_ID")
@@ -118,11 +121,13 @@ class DevinCloudHost(Host):
             async with http_client() as client:
                 client.headers["Authorization"] = f"Bearer {key}"
 
-                async def request(method, url, **kwargs):
+                async def request(method, url, *, expect_json=True, **kwargs):
                     try:
                         response = await client.request(method, url, **kwargs)
                         if response.is_error:
                             raise WorkerUnavailable(f"Devin API HTTP {response.status_code}")
+                        if not expect_json:
+                            return {}
                         data = response.json()
                         if not isinstance(data, dict):
                             raise ValueError
@@ -143,6 +148,19 @@ class DevinCloudHost(Host):
                     url = session.get("url")
                     url = url if isinstance(url, str) and url.startswith("https://app.devin.ai/") else None
                     await message(f"Devin cloud session: {url or session_id}")
+
+                    async def pump_inbox():
+                        while True:
+                            text = await inbox.get()
+                            try:
+                                await request("POST", f"{endpoint}/{quote(session_id, safe='')}/messages",
+                                              json={"message": clean(text)}, expect_json=False)
+                            except WorkerUnavailable as exc:
+                                await message(f"Cloud steering failed: {exc}")
+                            else:
+                                await message("Steering sent to Devin cloud")
+
+                    steering = asyncio.create_task(pump_inbox())
                     delay = INITIAL_POLL_S
                     last_state = None
                     while True:
@@ -189,3 +207,7 @@ class DevinCloudHost(Host):
             await finish(AgentStatus.error, str(exc))
         except Exception:
             await finish(AgentStatus.error, "Invalid cloud QA response or configuration (details withheld)")
+        finally:
+            if steering is not None:
+                steering.cancel()
+                await asyncio.gather(steering, return_exceptions=True)

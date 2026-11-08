@@ -18,7 +18,7 @@ async def run_agent(agent, worker, emit, inbox, stop, artifacts_dir, **kw: Any) 
     from raven_core.hosts.devin_cloud import DevinCloudHost
 
     if isinstance(worker, DevinCloudHost):
-        return await worker.run(agent, emit, stop)
+        return await worker.run(agent, emit, inbox, stop)
     if isinstance(worker, Host):
         from raven_core.engine.h_agent import run_h_agent
 
