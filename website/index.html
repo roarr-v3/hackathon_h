@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090909">
+  <meta name="description" content="Meet Raven. Voice-driven, cross-platform software QA. Devin plans. H Company agents test. You stay in control.">
+  <title>Raven — Small bird. Big bug energy.</title>
+  <link rel="icon" href="assets/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="motion.css">
+  <script defer src="vendor/gsap.min.js"></script>
+  <script defer src="vendor/ScrollTrigger.min.js"></script>
+  <script defer src="vendor/MotionPathPlugin.min.js"></script>
+  <script defer src="animations.js"></script>
+</head>
+<body>
+  <div class="reading-progress" aria-hidden="true"></div>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="nav wrap">
+    <a href="#" class="brand" aria-label="Raven home"><img src="assets/raven-small.webp" alt="" width="43" height="48">raven<span>®</span></a>
+    <nav aria-label="Main navigation"><a href="#how-it-works">The flight plan</a><a href="#platforms">Platforms</a><a href="#demo">The demo</a></nav>
+    <a class="nav-github" href="https://github.com/roarr-v3/hackathon_h">Explore GitHub <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="main">
+    <section class="hero wrap">
+      <div class="eyebrow"><span class="status-dot"></span> YOUR NEW QA SIDEKICK HAS WINGS</div>
+      <h1 aria-label="Small bird. Big bug energy."><span class="headline-word" aria-hidden="true">Small</span> <span class="headline-word" aria-hidden="true">bird.</span><br><span class="headline-word" aria-hidden="true">Big</span> <span class="headline-word headline-accent" aria-hidden="true">bug energy.</span></h1>
+      <p class="hero-copy">Tell it what to test. Watch it fly.<br>Voice-driven QA that takes your apps under its wing.</p>
+      <div class="hero-actions"><a class="button primary" href="https://github.com/roarr-v3/hackathon_h">Meet Raven on GitHub <span>↗</span></a><a class="text-link" href="#how-it-works">See the flight plan <span>↓</span></a></div>
+      <div class="hero-art">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="moon"></div>
+        <span class="star star-one">✦</span><span class="star star-two">✧</span><span class="star star-three">✦</span><span class="star star-four">+</span>
+        <div class="bubble speech"><span class="wave">▂ ▅ █ ▃ ▆ ▂</span> “Test the message flow.”</div>
+        <img class="hero-raven" src="assets/raven.webp" alt="Raven, a cheerful indigo bird with big blue eyes and a golden beak" width="750" height="850" fetchpriority="high">
+        <div class="bubble verdict"><span>✓</span><div>One little bird. All the details.<small>VERDICT: PASSED</small></div></div>
+        <span class="art-caption">a sharp eye for the things you miss.</span>
+      </div>
+      <div class="hero-bottom"><span>BUILT TO TEST BEYOND THE BROWSER</span><div>macOS <i>✦</i> iOS <i>✦</i> Linux <i>✦</i> Windows</div><a href="#how-it-works" aria-label="Scroll to the flight plan">↓</a></div>
+    </section>
+    <section class="partners"><div class="wrap"><span>A LITTLE BIRD. A BRILLIANT FLOCK.</span><div><b>H Company</b><b>Devin<span class="partner-mark">_</span></b><b>gladia<span class="partner-mark">.</span></b><b>Linkup ↗</b><b>42AI</b></div></div></section>
+    <section class="section wrap" id="how-it-works">
+      <div class="section-heading"><div><span class="eyebrow">01 / THE FLIGHT PLAN</span><h2>From “what if”<br>to <em>“checked it.”</em></h2></div><p>No scripts to babysit. No guessing what happened.<br>A clear plan, real interactions, and a verdict<br>you can actually follow.</p></div>
+      <div class="steps">
+        <article><span class="step-number">01 <span>↗</span></span><div class="step-icon pink"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg></div><h3>Say the word.</h3><p>Speak with Gladia or type your task. Start from Raven Agent or your iPhone.</p><small>YOUR VOICE → A MISSION</small></article>
+        <article><span class="step-number">02 <span>↗</span></span><div class="step-icon blue">⌘</div><h3>A plan, not a guess.</h3><p>Devin reads the target repo and turns your request into a validated QA plan.</p><small>DEVIN → THE FLIGHT PLAN</small></article>
+        <article><span class="step-number">03 <span>↗</span></span><div class="step-icon amber">✦</div><h3>Eyes on the app.</h3><p>H Company’s Holo4 agents click, type, and check real interfaces on your selected targets.</p><small>H COMPANY → REAL COMPUTER USE</small></article>
+        <article><span class="step-number">04 <span>↺</span></span><div class="step-icon lavender">↻</div><h3>Catch. Learn. Retry.</h3><p>Linkup adds web context on failure. Explicit fix & retry brings Devin back, with your approval.</p><small>YOU → ALWAYS IN CONTROL</small></article>
+      </div>
+      <div class="guardrail"><span>✳</span><p><strong>Little wings. Clear boundaries.</strong> Every run ends with PASSED or FAILED. Repairs need per-operation approval; a missing deployment is a blocker, not a pretend pass.</p></div>
+    </section>
+    <section class="platform-section" id="platforms"><div class="wrap platform-grid"><div><span class="eyebrow">02 / NO PLATFORM LEFT BEHIND</span><h2>Different screens.<br>Same <em>sharp eyes.</em></h2><p>Native apps don’t live in a browser tab.<br>Raven meets them where they are.</p><div class="platform-chips"><span>⌘ macOS</span><span>▯ iOS</span><span>›_ Linux</span><span>⊞ Windows</span></div><small>Native Mac & Device Hub · Apple Container Linux<br>Devin Windows VM · readiness depends on target access</small></div><div class="device-scene" aria-label="Illustration of Raven watching desktop and mobile tests"><div class="desktop-frame"><div class="window-dots">● ● ● <span>raven / cross-platform check</span></div><div class="test-lines"><span>✓ &nbsp; Setup verified</span><span>✓ &nbsp; Task executed</span><span>✓ &nbsp; Expected result checked</span><strong>VERDICT: PASSED <span>✦</span></strong></div></div><div class="phone-frame"><span class="phone-notch"></span><img src="assets/raven-small.webp" alt="" width="90" height="102"><span>All eyes on it.</span><div><svg width="45" height="16" viewBox="0 0 45 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M2 8h4l3-5 4 10 4-10 4 10 4-10 4 10 4-10 3 5h7"/></svg></div></div><img class="perched-raven" src="assets/raven-small.webp" alt="Raven perched beside the devices" width="220" height="249"><span class="scene-note">one flock. four platforms.</span></div></div></section>
+    <section class="section wrap" id="demo"><div class="demo-card"><div><span class="eyebrow">03 / A REAL-WORLD FLIGHT TEST</span><h2>One message.<br>Four platforms.<br><em>Something’s off.</em></h2><p>Our demo follows bitchat messages over Nostr geohash channels. A receive-side bug is planted in the Swift and Linux clients. The Windows client stays unmodified.</p><p>Raven’s mission? Follow the checks. Spot the mismatch. Bring back the evidence.</p><a class="text-link" href="https://github.com/roarr-v3/hackathon_h/tree/main/specs">Explore the test suites <span>↗</span></a></div><div class="demo-terminal"><div class="terminal-top"><span>● ● ●</span> bitchat-geohash-interop</div><span class="terminal-label">ILLUSTRATIVE QA FLIGHT LOG</span><p><span class="muted">01</span> &nbsp; macOS sends a message <b>✓</b></p><p><span class="muted">02</span> &nbsp; Check receiving clients <b>✓</b></p><p class="failed"><span>03</span> &nbsp; Receive-side mismatch <b>!</b></p><div class="terminal-verdict">VERDICT: FAILED <span>↗</span></div><p class="terminal-note">A caught bug is a good landing.</p><div class="demo-sticker">BUG<br>SPOTTED! <span>✦</span></div></div></div></section>
+    <section class="surfaces wrap"><span class="eyebrow">YOUR FLOCK, WITH YOU</span><h2>At your desk.<br>Or out of the nest.</h2><div class="surface-grid"><article><span>⌘</span><div><h3>Raven Agent</h3><p>A desktop home built on t3code. Start a mission, speak a prompt, and follow the agent’s work.</p></div></article><article><span>↗</span><div><h3>RavenMobile</h3><p>Your iPhone, your command center. Agent chat threads and voice in an all-black SwiftUI app.</p></div></article></div></section>
+    <section class="closing wrap"><img src="assets/raven-small.webp" alt="" width="120" height="136"><span class="eyebrow">LET’S GO BUG HUNTING</span><h2>Give your QA wings.</h2><p>Open source. A little opinionated. Very observant.</p><a class="button primary" href="https://github.com/roarr-v3/hackathon_h">Explore Raven on GitHub <span>↗</span></a></section>
+  </main>
+  <footer class="wrap"><a class="brand" href="#">raven<span>®</span></a><p>H Company × 42AI Hackathon<br>Paris · November 2026</p><span>Made with a bird’s-eye view. <a href="https://github.com/roarr-v3/hackathon_h" aria-label="Raven source on GitHub">↗</a></span></footer>
+</body>
+</html>
