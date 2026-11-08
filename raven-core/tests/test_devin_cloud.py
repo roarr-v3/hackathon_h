@@ -234,6 +234,31 @@ def test_server_cloud_deadline_exceeds_default_cap(tmp_path, monkeypatch, cloud,
     assert bool(completed) is use_cloud
 
 
+@pytest.mark.parametrize("value", ["abc", "", "nan", "inf", "-1", "0"])
+def test_invalid_cloud_timeout_does_not_strand_run(tmp_path, monkeypatch, cloud, caplog, value):
+    from raven_core.hosts.devin_cloud import timeout_seconds
+
+    monkeypatch.setenv("RAVEN_DEVIN_TIMEOUT_S", value)
+    completed = []
+
+    async def runner(spec, platforms, start, run):
+        completed.append(True)
+
+    async def main():
+        raven = Raven(settings=Settings(artifacts_dir=tmp_path, reports=False), store=Store())
+        raven.run_spec = runner
+        spec = Spec(name="cloud", agents=[SpecAgent(platform=Platform.linux, task="Verify")])
+        run = Run(spec=spec.name, platforms=spec.platforms)
+        raven.store.add_run(run)
+        await raven._run_task(run, spec, spec.platforms)
+        assert run.status in ("passed", "failed", "stopped")
+
+    asyncio.run(main())
+    assert completed == [True]
+    assert timeout_seconds() == 1800
+    assert "Invalid RAVEN_DEVIN_TIMEOUT_S; using 1800 seconds" in caplog.text
+
+
 def test_stop_before_create(tmp_path, monkeypatch, cloud):
     def forbidden(request):
         pytest.fail("stopped cloud agent must not create a session")

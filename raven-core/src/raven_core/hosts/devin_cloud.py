@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import math
 import os
 from typing import Any, Awaitable, Callable, Literal
 from urllib.parse import quote
@@ -27,6 +29,7 @@ class CloudResult(BaseModel):
 
 RESULT_SCHEMA = {"$schema": "http://json-schema.org/draft-07/schema#", **CloudResult.model_json_schema()}
 INITIAL_POLL_S = 15.0
+log = logging.getLogger(__name__)
 
 
 def selected(platform) -> bool:
@@ -36,7 +39,14 @@ def selected(platform) -> bool:
 
 
 def timeout_seconds() -> float:
-    return float(os.environ.get("RAVEN_DEVIN_TIMEOUT_S", "1800"))
+    try:
+        value = float(os.environ.get("RAVEN_DEVIN_TIMEOUT_S", "1800"))
+        if math.isfinite(value) and value > 0:
+            return value
+    except ValueError:
+        pass
+    log.warning("Invalid RAVEN_DEVIN_TIMEOUT_S; using 1800 seconds")
+    return 1800.0
 
 
 class DevinCloudHost(Host):
