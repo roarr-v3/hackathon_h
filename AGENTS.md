@@ -75,8 +75,8 @@ pairing token. `/health` is unauthenticated.
 - `GET  /agents` → `Agent[]` · `POST /agents` `CreateAgentRequest` → `Agent`
   (`repo_path` for planning; `repair: true` + `previous_agent_id` to resume a failed free-form check)
 - `GET  /agents/{id}` → `{"agent": Agent, "events": Event[]}`
-- `POST /agents/{id}/messages` `SendMessageRequest` (steer a running agent; a reply to a finished agent
-  re-runs it as a new agent with the earlier task as context) → `{ok, delivered, agent_id}`.
+- `POST /agents/{id}/messages` `SendMessageRequest` (steer a running agent; a reply to a finished free-form
+  agent resumes that same agent and thread, with the earlier task as context) → `{ok, delivered, agent_id}`.
   Free-form prompts naming Xcode or Device Hub run on macOS (those are Mac apps), even if they mention an iPhone.
 - `POST /agents/{id}/stop`
 - `GET/POST /agents/{id}/approvals/{approval_id}` — inspect a pending local repair operation,

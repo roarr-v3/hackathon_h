@@ -155,18 +155,28 @@ def test_messages_steer_agent(client):
     assert "hi there" in texts and "got hi there" in texts
 
 
-def test_reply_to_finished_agent_reruns_it_with_the_earlier_task(client):
-    first = client.post("/agents", json={"platform": "linux", "task": "fail please"}).json()
-    wait_until(lambda: agent_status(client, first["id"]) == "failed")
-    r = client.post(f"/agents/{first['id']}/messages", json={"text": "try the menu instead"}).json()
-    assert r["delivered"] is True and r["agent_id"] not in (None, first["id"])
-    follow = client.get(f"/agents/{r['agent_id']}").json()["agent"]
-    assert follow["platform"] == "linux"
-    assert follow["original_task"] == "try the menu instead\n\n(Earlier task in this conversation: fail please)"
-    texts = [e["data"].get("text") or "" for e in client.get(f"/agents/{first['id']}").json()["events"]]
-    assert "try the menu instead" in texts and any(r["agent_id"] in text for text in texts)
-    r = client.post(f"/agents/{first['id']}/messages", json={"text": "open xcode and build it"}).json()
-    assert client.get(f"/agents/{r['agent_id']}").json()["agent"]["platform"] == "macos"
+def test_reply_to_finished_agent_continues_in_the_same_thread(client):
+    agent = client.post("/agents", json={"platform": "linux", "task": "fail please"}).json()
+    wait_until(lambda: agent_status(client, agent["id"]) == "failed")
+
+    def detail():
+        return client.get(f"/agents/{agent['id']}").json()
+
+    def verdicts():
+        return [e["data"]["passed"] for e in detail()["events"] if e["type"] == "agent.verdict"]
+
+    r = client.post(f"/agents/{agent['id']}/messages", json={"text": "now say bye"}).json()
+    assert r == {"ok": True, "delivered": True, "agent_id": agent["id"]}
+    wait_until(lambda: len(verdicts()) == 2)
+    assert verdicts() == [False, False]
+    assert detail()["agent"]["original_task"] == "now say bye\n\n(Earlier task in this conversation: fail please)"
+    assert "now say bye" in [e["data"].get("text") for e in detail()["events"]]
+    assert [a["id"] for a in client.get("/agents").json()] == [agent["id"]]
+    wait_until(lambda: agent_status(client, agent["id"]) == "failed")
+    r = client.post(f"/agents/{agent['id']}/messages", json={"text": "open xcode and build it"}).json()
+    assert r["agent_id"] == agent["id"]
+    wait_until(lambda: len(verdicts()) == 3)
+    assert detail()["agent"]["platform"] == "macos" and detail()["agent"]["worker"] == "fake-macos"
 
 
 def test_stop_agent(client):

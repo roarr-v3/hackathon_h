@@ -86,6 +86,7 @@ class AgentHandle:
     inbox: asyncio.Queue[str]
     stop: StopSignal
     task: asyncio.Task[Any] | None = None
+    first_event: int = 0
 
 
 @dataclass

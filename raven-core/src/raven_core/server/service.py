@@ -339,27 +339,7 @@ class Raven:
         if req.repair and req.previous_agent_id and selected is None:
             selected = self.get_agent(req.previous_agent_id).execution
         execution = self.execution_profiles.snapshot(selected, model=None if run else req.model)
-        worker: Any = None
-        pending: Any = None
-        error: Exception | None = None
-        worker_name = req.platform.value
-        try:
-            get_worker = self._get_worker_fn()
-            worker_options: dict[str, Any] = {}
-            if _accepts(get_worker, "placement"):
-                worker_options["placement"] = req.placement
-            if _accepts(get_worker, "execution"):
-                worker_options["execution"] = execution
-            w = self._prepared_workers.get((run_id, req.platform)) if run_id else None
-            if w is None:
-                w = get_worker(req.platform, **worker_options)
-            if inspect.isawaitable(w):
-                pending = w
-            else:
-                worker = w
-                worker_name = _worker_name(w, req.platform)
-        except Exception as e:  # missing module, no sandbox, ...
-            error = e
+        worker, pending, error, worker_name = self._select_worker(req, execution, run_id)
         agent = StartedAgent(
             run_id=run_id,
             platform=req.platform,
@@ -384,6 +364,64 @@ class Raven:
             self._agent_task(agent, worker, pending, handle, error, timeout_s=req.timeout_s, request=req), name=f"agent-{agent.id}"
         )
         return agent
+
+    def _select_worker(
+        self, req: CreateAgentRequest, execution: ExecutionProfile, run_id: str | None = None,
+    ) -> tuple[Any, Any, Exception | None, str]:
+        worker: Any = None
+        pending: Any = None
+        error: Exception | None = None
+        worker_name = req.platform.value
+        try:
+            get_worker = self._get_worker_fn()
+            worker_options: dict[str, Any] = {}
+            if _accepts(get_worker, "placement"):
+                worker_options["placement"] = req.placement
+            if _accepts(get_worker, "execution"):
+                worker_options["execution"] = execution
+            w = self._prepared_workers.get((run_id, req.platform)) if run_id else None
+            if w is None:
+                w = get_worker(req.platform, **worker_options)
+            if inspect.isawaitable(w):
+                pending = w
+            else:
+                worker = w
+                worker_name = _worker_name(w, req.platform)
+        except Exception as e:  # missing module, no sandbox, ...
+            error = e
+        return worker, pending, error, worker_name
+
+    def _resume_agent(self, agent: Agent, text: str) -> str | None:
+        if agent.run_id is not None:
+            return None
+        plats = task_platforms(text)
+        task = follow_up_task(text, agent.original_task or agent.task)
+        req = CreateAgentRequest(
+            platform=plats[0] if len(plats) == 1 else agent.platform, task=task, placement=requested(text),
+            model=agent.execution.model if agent.execution else None, repo_path=agent.repo_path,
+        )
+        execution = self.execution_profiles.snapshot(None, model=req.model)
+        worker, pending, error, worker_name = self._select_worker(req, execution)
+        previous = self.store.handles.get(agent.id)
+        handle = AgentHandle(inbox=asyncio.Queue(), stop=StopSignal())
+        self.store.handles[agent.id] = handle
+        self._sysmsg(agent, f"Continuing in this thread on {req.platform.value}.")
+
+        async def attempt() -> None:
+            if previous is not None and previous.task is not None:
+                await asyncio.wait({previous.task})
+            agent.platform, agent.worker, agent.placement = req.platform, worker_name, _placement_of(worker)
+            agent.task = agent.original_task = task
+            agent.execution, agent.verdict_reason = execution, None
+            self._status(agent, AgentStatus.queued)
+            if worker is not None:
+                self._agent_workers[agent.id] = worker
+                self._owned_workers[id(worker)] = worker
+            handle.first_event = len(self.store.agent_events.get(agent.id, []))
+            await self._agent_task(agent, worker, pending, handle, error, request=req)
+
+        handle.task = asyncio.get_running_loop().create_task(attempt(), name=f"agent-{agent.id}")
+        return agent.id
 
     async def _agent_task(
         self,
@@ -521,7 +559,8 @@ class Raven:
                     held_lock.release()
                 if final is not None:
                     self._status(agent, final)
-                    if not any(event.type == "agent.verdict" for event in self.store.agent_events.get(agent.id, [])):
+                    attempt_events = self.store.agent_events.get(agent.id, [])[handle.first_event:]
+                    if not any(event.type == "agent.verdict" for event in attempt_events):
                         self.emit(Event(type="agent.verdict", agent_id=agent.id, run_id=agent.run_id, data={
                             "passed": final == AgentStatus.passed,
                             "reason": agent.verdict_reason or "Agent ended without a verification verdict",
@@ -836,17 +875,7 @@ class Raven:
         agent = self.get_agent(agent_id)
         self.emit(Event(type="agent.message", agent_id=agent.id, run_id=agent.run_id, data={"role": "user", "text": text}))
         if agent.status in TERMINAL_AGENT:
-            plats = task_platforms(text)
-            follow = self.start_agent(CreateAgentRequest(
-                platform=plats[0] if len(plats) == 1 else agent.platform,
-                task=follow_up_task(text, agent.original_task or agent.task), placement=requested(text),
-                model=agent.execution.model if agent.execution else None,
-                repo_path=agent.repo_path, previous_agent_id=agent.id,
-            ))
-            self.emit(Event(type="agent.message", agent_id=agent.id, run_id=agent.run_id, data={
-                "role": "system", "text": f"Re-running on {follow.platform.value} as {follow.id}.",
-            }))
-            return follow.id
+            return self._resume_agent(agent, text)
         h = self.store.handles.get(agent_id)
         if h is None or (h.task is not None and h.task.done()):
             return None
