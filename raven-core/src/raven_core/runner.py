@@ -111,6 +111,7 @@ async def run_spec(
     chosen = [a for a in spec.agents if a.platform in wanted]
     # A cloud machine owns setup and all roles on that platform, in one session.
     cloud_platforms = {a.platform for a in chosen if cloud_selected(a.platform)}
+    multi_agent = len(chosen) > 1
     for platform in cloud_platforms:
         roles = [a for a in chosen if a.platform == platform]
         task = (
@@ -120,7 +121,13 @@ async def run_spec(
             + "\n\n## Verification\nVerify on screen and quote visible evidence; do not infer success."
         )
         chosen = [a for a in chosen if a.platform != platform]
-        chosen.append(SpecAgent(platform=platform, task=task, start_delay_s=max(a.start_delay_s or 0 for a in roles)))
+        delay = max(
+            a.start_delay_s if a.start_delay_s is not None
+            else SENDER_DELAY_S if a.role == "sender" and multi_agent else 0
+            for a in roles
+        )
+        role = "sender" if any(a.role == "sender" for a in roles) else roles[0].role
+        chosen.append(SpecAgent(platform=platform, task=task, role=role, start_delay_s=delay))
     if not chosen:
         await set_status(RunStatus.failed)
         return

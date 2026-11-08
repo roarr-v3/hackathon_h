@@ -294,3 +294,30 @@ def test_runner_one_session_per_platform_in_parallel(tmp_path, monkeypatch, clou
     assert len(posts) == len(run.agent_ids) == 2
     linux = next(p for p in posts if p["platform"] == "linux")
     assert all(text in linux["prompt"] for text in ["linux-app", "first", "second", "## Expected Result", "## Verification"])
+
+
+@pytest.mark.parametrize("delay, expected", [(None, 20), (0, 0), (7, 7)])
+def test_cloud_sender_preserves_start_gate(monkeypatch, cloud, delay, expected):
+    from raven_core import runner
+
+    sleeps = []
+    real_sleep = asyncio.sleep
+
+    async def sleep(seconds):
+        if seconds in (20, 7):
+            sleeps.append(seconds)
+            return
+        await real_sleep(seconds)
+
+    monkeypatch.setattr(runner.asyncio, "sleep", sleep)
+    spec = Spec(name="cloud", agents=[SpecAgent(platform=Platform.linux, task="Receive"),
+                SpecAgent(platform=Platform.windows, role="sender", task="Send", start_delay_s=delay),
+                SpecAgent(platform=Platform.windows, task="Verify", start_delay_s=0)])
+    run = Run(spec=spec.name, platforms=spec.platforms)
+
+    async def start(req, run_id):
+        return Agent(platform=req.platform, worker="cloud", title="QA", task=req.task, status=AgentStatus.passed)
+
+    asyncio.run(run_spec(spec, None, start, run, poll_s=0.001))
+    assert run.status == "passed"
+    assert sleeps == ([expected] if expected else [])
