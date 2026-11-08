@@ -291,9 +291,7 @@ async def inspect_targets(execution: ExecutionProfile) -> list[dict]:
                 matching = [d for d in devices if d.get("kind") == execution.ios_target and (
                     not execution.ios_device_id or str(d.get("id", "")).casefold() == execution.ios_device_id.casefold()
                 )]
-                if execution.ios_target == "device" and not execution.ios_device_id:
-                    row.update(status="blocked", detail="Physical iOS requires an explicit ios_device_id selected from DeviceHub inventory")
-                elif not matching:
+                if not matching:
                     row.update(status="blocked", detail="Selected iOS device was not found by DeviceHub")
                 elif not any(d.get("available") is True for d in matching):
                     row.update(status="blocked", detail="Selected iOS device is unavailable; check pairing, trust, unlock and Developer Mode")

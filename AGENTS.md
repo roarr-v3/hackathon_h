@@ -46,9 +46,10 @@ or `model` overrides affect that snapshot. Old Settings H-mode/model saves are r
 - Windows: `windows_target` accepts only `devin-vm`: a real Devin Windows VM, gated by
   organization access, v3 credentials and authenticated CLI SSH. Missing access is a blocker,
   not a reason to select another backend.
-- macOS: native on this Mac. iOS: native Device Hub with `ios_target: simulator | device`
-  and exact `ios_device_id` from `/execution/devices`. Physical devices require an explicit ID;
-  omitting it is valid only for a single available simulator, never the arbitrary foreground device.
+- macOS: native on this Mac. iOS is a Mac workflow: H drives this Mac and controls the phone through
+  Device Hub. `ios_target` defaults to `device`: any connected, unlocked physical iPhone (an exact
+  `ios_device_id` from `/execution/devices` pins one). Simulators are used only when `simulator` is selected
+  (the first available one unless an ID pins it); a physical device is never a simulator fallback or vice versa.
 `POST /execution/check` is read-only inventory, not a live H test: no provisioning or device boot.
 
 ## Layout (ownership boundaries — do not edit outside your area)
@@ -77,9 +78,8 @@ pairing token. `/health` is unauthenticated.
 - `GET  /agents/{id}` → `{"agent": Agent, "events": Event[]}`
 - `POST /agents/{id}/messages` `SendMessageRequest` (steer a running agent; a reply to a finished free-form
   agent resumes that same agent and thread, with the earlier task as context) → `{ok, delivered, agent_id}`.
-  Free-form prompts (Raven Agent, iPhone home/thread composer, voice) never pick iOS just because they mention
-  an iPhone: they run on the Mac (default platform), and prompts naming Xcode or Device Hub always do.
-  Only an explicit `on ios: …` targets the iOS Device Hub worker.
+  Free-form prompts (Raven Agent, iPhone home/thread composer, voice) that mention an iPhone/iPad/iOS use
+  the iOS workflow (this Mac controlling the phone through Device Hub); prompts naming no platform run on the Mac.
 - `POST /agents/{id}/stop`
 - `GET/POST /agents/{id}/approvals/{approval_id}` — inspect a pending local repair operation,
   then submit `{"option_id": "<offered allow_once ID>"}` or `{"option_id": null}` to deny.

@@ -64,5 +64,5 @@ def test_follow_ups_stay_on_the_same_machine(monkeypatch):
     assert ask("now type merci")[1] == f"now type merci{EARLIER_TASK}open TextEdit and type bonjour)"
     assert ask("same thing but in a vm")[2] == "vm"
     assert ask("on linux: open a terminal") == ("linux", "open a terminal", "auto")
-    assert ask("open xcode and build the app for sinan's iphone")[0] == "macos"
-    assert ask("open settings on my iphone")[0] == "macos"
+    assert ask("open xcode and build the app for sinan's iphone")[0] == "ios"
+    assert ask("open settings on my iphone")[0] == "ios"

@@ -38,7 +38,6 @@ _ALIAS = {
     "ipad": Platform.ios,
 }
 _PLAT_WORD = r"(?:mac\s?os|os\s?x|mac|linux|ubuntu|windows|win|ios|iphone)"
-_MAC_APP_RE = re.compile(r"\b(?:xcode|device\s?hub)\b", re.I)
 EARLIER_TASK = "\n\n(Earlier task in this conversation: "
 _PLACEMENT_PREFIX_RE = re.compile(
     r"^(?:(?:in|on|inside|using)\s+(?:an?\s+|the\s+)?(?:vm|virtual\s+machine|sandbox|container)"
@@ -78,9 +77,7 @@ def parse_platforms(text: str) -> list[Platform]:
 
 
 def task_platforms(text: str) -> list[Platform]:
-    if _MAC_APP_RE.search(text or ""):
-        return [Platform.macos]
-    return [p for p in parse_platforms(text) if p != Platform.ios]
+    return parse_platforms(text)
 
 
 def follow_up_task(text: str, earlier: str) -> str:

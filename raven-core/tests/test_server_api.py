@@ -173,14 +173,16 @@ def test_reply_to_finished_agent_continues_in_the_same_thread(client):
     assert "now say bye" in [e["data"].get("text") for e in detail()["events"]]
     assert [a["id"] for a in client.get("/agents").json()] == [agent["id"]]
     wait_until(lambda: agent_status(client, agent["id"]) == "failed")
-    r = client.post(f"/agents/{agent['id']}/messages", json={"text": "open xcode and build it"}).json()
+    r = client.post(f"/agents/{agent['id']}/messages", json={"text": "now do it on the mac"}).json()
     assert r["agent_id"] == agent["id"]
     wait_until(lambda: len(verdicts()) == 3)
     assert detail()["agent"]["platform"] == "macos" and detail()["agent"]["worker"] == "fake-macos"
     phone = client.post("/agents", json={"platform": "ios", "task": "say hi"}).json()
     wait_until(lambda: agent_status(client, phone["id"]) == "passed")
-    client.post(f"/agents/{phone['id']}/messages", json={"text": "rebuild the app for sinan's iphone"})
-    wait_until(lambda: client.get(f"/agents/{phone['id']}").json()["agent"]["platform"] == "macos")
+    r = client.post(f"/agents/{phone['id']}/messages", json={"text": "rebuild the app for sinan's iphone"}).json()
+    assert r["agent_id"] == phone["id"]
+    wait_until(lambda: client.get(f"/agents/{phone['id']}").json()["agent"]["original_task"].startswith("rebuild"))
+    assert client.get(f"/agents/{phone['id']}").json()["agent"]["platform"] == "ios"
 
 
 def test_stop_agent(client):
@@ -340,8 +342,11 @@ def test_voice_command_intents(client, monkeypatch):
     wait_until(lambda: agent_status(client, agent_id) == "passed")
     r = client.post("/voice/command", json={"text": "Stop all."}).json()
     assert r["action"] == "stop_all"
-    r = client.post("/voice/command", json={"text": "open safari for sinan's iphone"}).json()
+    r = client.post("/voice/command", json={"text": "open safari and search for raven"}).json()
     assert r["action"] == "agent" and r["agent"]["platform"] == "macos"
+    wait_until(lambda: agent_status(client, r["agent"]["id"]) == "passed")
+    r = client.post("/voice/command", json={"text": "open settings on sinan's iphone"}).json()
+    assert r["action"] == "agent" and r["agent"]["platform"] == "ios"
     assert client.post("/voice/command", json={"text": "x", "agent_id": "nope"}).status_code == 404
 
 

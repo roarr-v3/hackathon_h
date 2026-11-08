@@ -47,7 +47,7 @@ class ExecutionProfile(BaseModel):
     linux_space: str = Field(default="raven-linux-apple", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
     linux_fallback: bool = True
     windows_target: Literal["devin-vm"] = "devin-vm"
-    ios_target: Literal["simulator", "device"] = "simulator"
+    ios_target: Literal["simulator", "device"] = "device"
     ios_device_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9:-]{1,128}$")
 
     def mode_for(self, platform: Platform) -> HMode:

@@ -311,17 +311,22 @@ def _select(devices: list[_Device], execution: ExecutionProfile) -> _Device:
                 f"Requested ios_device_id is a {selected.kind}, not ios_target={execution.ios_target}; "
                 "choose a matching target and ID."
             )
+    elif execution.ios_target == "device":
+        phones = [device for device in devices if device.kind == "device"]
+        available = [device for device in phones if device.reason is None]
+        if not available:
+            paired = ", ".join(f"{device.name} ({device.reason})" for device in phones) or "none paired"
+            raise WorkerUnavailable(
+                "No physical iPhone is available: connect and unlock one, trust this Mac and enable Developer Mode "
+                f"(paired: {paired}). Simulators are used only when Simulator is selected."
+            )
+        selected = ([device for device in available if "iphone" in device.name.casefold()] or available)[0]
     else:
         matches = [device for device in devices if device.kind == "simulator" and device.reason is None]
         if not matches:
             raise WorkerUnavailable(
-                "No available iOS simulator. Install an iOS runtime, add a simulator in Device Hub, "
-                "and set ios_device_id from list_devices(). Physical devices are never selected as a fallback."
-            )
-        if len(matches) != 1:
-            raise WorkerUnavailable(
-                "Multiple iOS simulators are available; set ios_device_id to an exact ID from list_devices(). "
-                "The foreground/booted simulator is not an implicit selection."
+                "No available iOS simulator. Install an iOS runtime and add a simulator in Device Hub. "
+                "Physical devices are never selected as a fallback."
             )
         selected = matches[0]
     if selected.reason:
@@ -357,11 +362,6 @@ async def list_devices() -> list[dict]:
 
 async def prepare_device(execution: ExecutionProfile) -> dict:
     _require_mac()
-    if execution.ios_target == "device" and execution.ios_device_id is None:
-        raise WorkerUnavailable(
-            "Physical device preparation requires an explicit ios_device_id from list_devices(); "
-            "pair and authorize that device in Device Hub first."
-        )
     developer, app = await _toolchain()
     devices = await _inventory(developer)
     selected = _select(devices, execution)

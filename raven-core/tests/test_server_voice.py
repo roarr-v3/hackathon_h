@@ -97,9 +97,8 @@ def test_parse_agent_and_misc():
     assert parse_command("status", SPECS).kind == "list"
     assert parse_command("hello there", SPECS).kind == "unknown"
     assert parse_platforms("linux, macOS and Windows 11") == [Platform.linux, Platform.macos, Platform.windows]
-    assert task_platforms("open xcode and build the app for sinan's iphone") == [Platform.macos]
-    assert task_platforms("open Device Hub and control my iPhone") == [Platform.macos]
-    assert task_platforms("open settings on my iphone") == []
-    assert task_platforms("on linux, check the iphone sync") == [Platform.linux]
+    assert task_platforms("open xcode and build the app for sinan's iphone") == [Platform.ios]
+    assert task_platforms("open Device Hub and control my iPhone") == [Platform.ios]
+    assert task_platforms("open safari and search for raven") == []
     assert match_spec("geohash", SPECS) == "bitchat-geohash-interop"
     assert match_spec("zzz", SPECS) is None

@@ -268,7 +268,7 @@ def test_explicit_simulator_beats_other_booted_target_and_uses_exact_udid(comman
     commands.simulators = [simulator(SIM_A, state="Booted"), simulator(SIM_B, "Requested")]
     commands.details = core_simulator(SIM_B, "Requested")
 
-    result = asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_device_id=SIM_B.lower())))
+    result = asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator", ios_device_id=SIM_B.lower())))
 
     assert result == {"id": SIM_B, "name": "Requested", "kind": "simulator", "available": True}
     assert commands.args("boot") == [("/usr/bin/xcrun", "simctl", "bootstatus", SIM_B, "-b")]
@@ -279,43 +279,44 @@ def test_explicit_simulator_beats_other_booted_target_and_uses_exact_udid(comman
     assert commands.args("lock") == []
 
 
-def test_default_uses_only_available_simulator_not_physical_device(commands):
-    commands.simulators.append(simulator(SIM_B, available=False))
-    commands.devices = [core_device()]
+def test_default_uses_any_available_iphone_not_a_simulator(commands):
+    ipad = core_device(PHONE_B, CORE_B, "Paired iPad")
+    ipad["hardwareProperties"]["deviceType"] = "iPad"
+    commands.devices = [ipad, core_device()]
+    commands.details = core_device()
     result = asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+    assert result == {"id": PHONE_A, "name": "Paired iPhone", "kind": "device", "available": True}
+    assert commands.args("boot") == []
+
+
+def test_default_without_an_available_iphone_never_falls_back_to_a_simulator(commands):
+    with pytest.raises(WorkerUnavailable, match="No physical iPhone is available"):
+        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+    commands.only_inventory()
+
+
+def test_selected_simulator_target_uses_the_first_available_simulator(commands):
+    commands.simulators.append(simulator(SIM_B, state="Booted"))
+    commands.devices = [core_device()]
+    result = asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     assert result["id"] == SIM_A
     assert commands.args("boot")[0][3] == SIM_A
 
 
-@pytest.mark.parametrize("booted", [False, True])
-def test_multiple_simulators_require_explicit_id_even_with_one_booted(commands, booted):
-    commands.simulators.append(simulator(SIM_B, state="Booted" if booted else "Shutdown"))
-    with pytest.raises(WorkerUnavailable, match="Multiple.*ios_device_id"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
-    commands.only_inventory()
-
-
 @pytest.mark.parametrize("simulators", [[], [simulator(available=False)]])
-def test_default_never_falls_back_to_physical_device(commands, simulators):
+def test_selected_simulator_target_never_falls_back_to_a_physical_device(commands, simulators):
     commands.simulators = simulators
     commands.devices = [core_device()]
     with pytest.raises(WorkerUnavailable, match="No available iOS simulator"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     commands.only_inventory()
-
-
-def test_physical_device_requires_explicit_id_even_when_only_one(commands):
-    commands.devices = [core_device()]
-    with pytest.raises(WorkerUnavailable, match="explicit ios_device_id"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="device")))
-    assert commands.calls == []
 
 
 @pytest.mark.parametrize("identifier", ["booted", "all", "iPhone", SIM_A[:8], SIM_B])
 def test_unknown_id_name_prefix_and_booted_alias_never_fall_back(commands, identifier):
     commands.simulators[0]["name"] = "iPhone"
     with pytest.raises(WorkerUnavailable, match="not found uniquely"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_device_id=identifier)))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator", ios_device_id=identifier)))
     commands.only_inventory()
 
 
@@ -341,7 +342,7 @@ def test_physical_id_or_coredevice_alias_is_resolved_to_exact_udid(commands, ide
 
 def test_reported_simulator_coredevice_alias_resolves_without_duplicate_inventory(commands):
     commands.devices = [core_simulator()]
-    result = asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_device_id=CORE_B)))
+    result = asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator", ios_device_id=CORE_B)))
     assert result["id"] == SIM_A
     assert commands.args("boot")[0][3] == SIM_A
     assert len(asyncio.run(device_hub.list_devices())) == 1
@@ -363,7 +364,7 @@ def test_simulator_coredevice_alias_cannot_be_requested_as_physical_device(comma
 def test_unavailable_simulator_is_never_booted(commands, change, message):
     commands.simulators[0].update(change)
     with pytest.raises(WorkerUnavailable, match=message):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_device_id=SIM_A)))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator", ios_device_id=SIM_A)))
     commands.only_inventory()
 
 
@@ -394,28 +395,28 @@ def test_duplicate_ids_fail_instead_of_choosing_first(commands, target):
     else:
         commands.devices = [core_device(), core_device(core_id=CORE_B)]
     with pytest.raises(WorkerUnavailable, match="duplicate/ambiguous"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     commands.only_inventory()
 
 
 def test_physical_and_simulated_coredevice_alias_collision_fails(commands):
     commands.devices = [core_device(core_id=CORE_B), core_simulator()]
     with pytest.raises(WorkerUnavailable, match="duplicate/ambiguous"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     commands.only_inventory()
 
 
 def test_fresh_simulator_details_cannot_reuse_another_devices_alias(commands):
     commands.devices = [core_device(core_id=CORE_B)]
     with pytest.raises(WorkerUnavailable, match="identity/type changed"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     assert commands.args("open") == []
 
 
 def test_coredevice_identifier_must_not_be_a_name(commands):
     commands.devices = [core_device(core_id="named-iPhone")]
     with pytest.raises(WorkerUnavailable, match="non-UUID CoreDevice identifier"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     commands.only_inventory()
 
 
@@ -445,7 +446,7 @@ def test_unknown_kind_is_not_inferred_from_device_name(commands):
 def test_simulator_details_must_still_identify_requested_ios_simulator(commands, details, message):
     commands.details = details
     with pytest.raises(WorkerUnavailable, match=message):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_device_id=SIM_A)))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator", ios_device_id=SIM_A)))
     assert commands.args("open") == []
     assert commands.args("lock") == []
 
@@ -454,7 +455,7 @@ def test_coredevice_alias_cannot_hide_changed_hardware_id(commands):
     commands.details = core_simulator(SIM_B)
     commands.details["identifier"] = SIM_A
     with pytest.raises(WorkerUnavailable, match="identity/type changed"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     assert commands.args("open") == []
 
 
@@ -477,7 +478,7 @@ def test_physical_details_cannot_switch_to_other_phone_with_same_core_alias(comm
 
 def test_wrapped_device_details_supported(commands):
     commands.details = {"device": commands.details}
-    assert asyncio.run(device_hub.prepare_device(ExecutionProfile()))["id"] == SIM_A
+    assert asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))["id"] == SIM_A
 
 
 def test_modern_properties_take_precedence_over_deprecated_availability(commands):
@@ -493,14 +494,14 @@ def test_conflicting_modern_screen_urls_do_not_open_any_target(commands):
         "other": {"screenViewingURL": f"devices://device/open?id={SIM_B}"},
     }
     with pytest.raises(WorkerUnavailable, match="conflicting screenViewingURL"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     assert commands.args("open") == []
 
 
 def test_started_simulator_must_be_reported_booted_before_open(commands):
     commands.details["deviceProperties"]["bootState"] = "shutdown"
     with pytest.raises(WorkerUnavailable, match="not booted"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     assert commands.args("open") == []
 
 
@@ -520,7 +521,7 @@ def test_started_simulator_must_be_reported_booted_before_open(commands):
 def test_missing_wrong_or_unsafe_screen_url_never_opens_generic_hub(commands, url):
     commands.details["deviceProperties"]["screenViewingURL"] = url
     with pytest.raises(WorkerUnavailable, match="screenViewingURL") as error:
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     assert "do-not-log" not in str(error.value)
     assert commands.args("open") == []
 
@@ -557,7 +558,7 @@ def test_physical_device_lock_probe_is_pinned_and_requires_authorization(command
 def test_malformed_inventory_never_becomes_empty_success(commands, stage, payload, message):
     commands.overrides[stage] = Process(payload)
     with pytest.raises(WorkerUnavailable, match=message) as error:
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     assert "not-json-secret" not in str(error.value)
     commands.only_inventory()
 
@@ -566,7 +567,7 @@ def test_malformed_inventory_never_becomes_empty_success(commands, stage, payloa
 def test_bad_simulator_identifiers_never_reach_boot(commands, identifier):
     commands.simulators[0]["udid"] = identifier
     with pytest.raises(WorkerUnavailable, match="identifier"):
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     commands.only_inventory()
 
 
@@ -574,7 +575,7 @@ def test_bad_simulator_identifiers_never_reach_boot(commands, identifier):
 def test_command_errors_do_not_leak_output_or_fall_back(commands, stage):
     commands.overrides[stage] = Process(b"secret stdout", code=1, stderr=b"secret stderr")
     with pytest.raises(WorkerUnavailable, match="command failed") as error:
-        asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+        asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     assert "secret" not in str(error.value)
     assert commands.calls[-1][0] == stage
     assert all(process.kills == 0 for process in commands.processes)
@@ -600,7 +601,7 @@ def test_environment_does_not_forward_secrets_and_pins_selected_xcode(commands, 
     monkeypatch.setenv("OPENAI_API_KEY", "private-key")
     monkeypatch.setenv("DEVICECTL_CHILD_PASSWORD", "private-password")
     monkeypatch.setenv("DEVELOPER_DIR", "/Applications/Other Xcode.app/Contents/Developer")
-    asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+    asyncio.run(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
     for stage, _, options in commands.calls:
         assert options["stdin"] == asyncio.subprocess.DEVNULL
         assert options["stdout"] == options["stderr"] == asyncio.subprocess.PIPE
@@ -663,7 +664,7 @@ def test_timeout_kills_and_reaps_only_spawned_process(commands):
 def test_preparation_cancellation_kills_owned_command_and_stops_followup(commands, stage):
     blocked = Process(blocked=True)
     commands.overrides[stage] = blocked
-    execution = commands.physical() if stage == "lock" else ExecutionProfile()
+    execution = commands.physical() if stage == "lock" else ExecutionProfile(ios_target="simulator")
 
     async def scenario():
         task = asyncio.create_task(device_hub.prepare_device(execution))
@@ -684,7 +685,7 @@ def test_cancellation_during_spawn_waits_for_owned_process_then_kills_it(command
     commands.spawn_stage = "boot"
 
     async def scenario():
-        task = asyncio.create_task(device_hub.prepare_device(ExecutionProfile()))
+        task = asyncio.create_task(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
         await asyncio.wait_for(commands.spawning.wait(), 1)
         task.cancel()
         await asyncio.sleep(0)
@@ -704,7 +705,7 @@ def test_repeated_cancellation_cannot_interrupt_owned_process_cleanup(commands):
 
     async def scenario():
         blocked.reap_release = asyncio.Event()
-        task = asyncio.create_task(device_hub.prepare_device(ExecutionProfile()))
+        task = asyncio.create_task(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
         await asyncio.wait_for(blocked.communicating.wait(), 1)
         task.cancel()
         await asyncio.wait_for(blocked.reaping.wait(), 1)
@@ -725,7 +726,7 @@ def test_cancellation_cleanup_is_bounded_when_reaping_stalls(commands, monkeypat
 
     async def scenario():
         blocked.reap_release = asyncio.Event()
-        task = asyncio.create_task(device_hub.prepare_device(ExecutionProfile()))
+        task = asyncio.create_task(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
         await asyncio.wait_for(blocked.communicating.wait(), 1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -757,7 +758,7 @@ def test_exited_process_is_not_signalled_when_communication_is_cancelled(command
     commands.overrides["boot"] = blocked
 
     async def scenario():
-        task = asyncio.create_task(device_hub.prepare_device(ExecutionProfile()))
+        task = asyncio.create_task(device_hub.prepare_device(ExecutionProfile(ios_target="simulator")))
         await asyncio.wait_for(blocked.communicating.wait(), 1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

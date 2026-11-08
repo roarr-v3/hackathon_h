@@ -396,9 +396,8 @@ class Raven:
             return None
         plats = task_platforms(text)
         task = follow_up_task(text, agent.original_task or agent.task)
-        platform = agent.platform if agent.platform != Platform.ios else default_platform()
         req = CreateAgentRequest(
-            platform=plats[0] if len(plats) == 1 else platform, task=task, placement=requested(text),
+            platform=plats[0] if len(plats) == 1 else agent.platform, task=task, placement=requested(text),
             model=agent.execution.model if agent.execution else None, repo_path=agent.repo_path,
         )
         execution = self.execution_profiles.snapshot(None, model=req.model)
