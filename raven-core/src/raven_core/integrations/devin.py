@@ -33,7 +33,13 @@ _TOOL_KINDS = {"read", "search", "think", "edit", "execute", "delete", "move", "
 _TOOL_NAMES = {
     "read", "grep", "glob", "search", "code_search", "read_file", "list_directory",
     "exec", "edit", "write", "fetch", "write_plan", "exit_plan_mode", "provide_structured_output",
+    "mcp_list_servers", "mcp_list_tools", "apply_patch",
 }
+_LISTING_TOOLS = {"mcp_list_servers", "mcp_list_tools"}
+_DISABLED_TOOLS = (
+    "write_plan", "exit_plan_mode", "todo_write", "ask_user_question", "skill", "request_scope",
+    "web_search", "webfetch",
+)
 
 
 class DevinError(RuntimeError):
@@ -180,7 +186,7 @@ def _local_config(workspace: Path, *, fixing: bool) -> Path:
         },
         "permission_mode": "normal",
         "subagents_enabled": False, "auto_update": False, "otel": {"enabled": False},
-        "disabled_tools": [] if fixing else ["exec", "edit", "write", "write_plan", "exit_plan_mode"],
+        "disabled_tools": [*_DISABLED_TOOLS] if fixing else ["exec", "edit", "write", "apply_patch", *_DISABLED_TOOLS],
         "read_config_from": {
             name: False for name in
             ("agents_standard", "cursor", "windsurf", "claude", "copilot", "opencode", "zed", "cloud")
@@ -381,7 +387,7 @@ class _ACPClient:
                     self.pending_rejections.pop(tool_id, None)
                 else:
                     raise self.scope_error(details)
-            elif tool_kind not in permitted or (
+            elif (tool_kind not in permitted and not (tool_kind is None and _tool_name(details) in _LISTING_TOOLS)) or (
                 not self.fixing and _tool_name(details) in ("edit", "write", "fetch", "write_plan", "exit_plan_mode")
             ):
                 raise self.scope_error(details)

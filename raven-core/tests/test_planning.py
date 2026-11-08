@@ -344,7 +344,10 @@ def test_local_acp_uses_documented_protocol_trust_read_only_config_and_repo_cont
         assert kwargs["stdin"] == asyncio.subprocess.PIPE
         assert kwargs["start_new_session"] is True
         assert {"edit", "exec"} <= set(config["permissions"]["deny"])
-        assert {"exec", "edit", "write", "write_plan", "exit_plan_mode"} <= set(config["disabled_tools"])
+        assert {
+            "exec", "edit", "write", "apply_patch", "write_plan", "exit_plan_mode",
+            "todo_write", "ask_user_question", "skill", "web_search", "webfetch", "request_scope",
+        } <= set(config["disabled_tools"])
         assert "mcp__*" in config["permissions"]["deny"]
         assert config["subagents_enabled"] is False
         assert config["otel"]["enabled"] is False
@@ -659,6 +662,39 @@ def test_local_planner_does_not_confuse_tool_failure_with_permission_rejection(m
     assert f"kind={kind or 'unknown'}" in str(caught.value)
     assert f"name={name or 'unknown'}" in str(caught.value)
     assert any(message.get("method") == "session/cancel" for message in seen["proc"].requests)
+
+
+@pytest.mark.parametrize("name,kind,allowed", [
+    ("mcp_list_servers", None, True),
+    ("mcp_list_tools", None, True),
+    ("mcp_list_tools", "execute", False),
+    ("mcp_call_tool", None, False),
+    ("mcp_read_resource", None, False),
+    (None, None, False),
+])
+def test_local_planner_only_tolerates_unclassified_mcp_listing(monkeypatch, name, kind, allowed):
+    seen = {}
+
+    def on_prompt(proc, message):
+        proc.update({
+            "sessionUpdate": "tool_call", "toolCallId": "tool-1", **({"kind": kind} if kind else {}),
+            **({"_meta": {"cognition.ai/inferenceToolName": name}} if name else {}),
+        })
+        proc.update({"sessionUpdate": "tool_call_update", "toolCallId": "tool-1", "status": "completed"})
+        proc.complete(message, answer(message["params"]["prompt"][0]["text"]))
+
+    async def spawn(*args, **kwargs):
+        seen["proc"] = FakeACP(on_prompt=on_prompt)
+        return seen["proc"]
+
+    monkeypatch.setattr(devin, "spawn", spawn)
+    if allowed:
+        result = asyncio.run(planning.plan_task("open xcode and build the app for sinan's iphone", Platform.ios))
+        assert result.plan.platform == Platform.ios
+        return
+    with pytest.raises(planning.PlanningError) as caught:
+        asyncio.run(planning.plan_task("open xcode and build the app for sinan's iphone", Platform.ios))
+    assert caught.value.code == "blocked"
 
 
 @pytest.mark.parametrize("initial_status", [None, "pending"])
@@ -1133,7 +1169,8 @@ def test_fix_resumes_saved_session_in_target_repo_with_separate_control_config(r
         config = json.loads(config_path.read_text())
         assert {"edit", "exec", "Write(/**)", "Write(**)"} <= set(config["permissions"]["ask"])
         assert not {"edit", "exec"} & set(config["permissions"]["allow"])
-        assert "exec" not in config["disabled_tools"]
+        assert not {"exec", "apply_patch"} & set(config["disabled_tools"])
+        assert {"todo_write", "web_search"} <= set(config["disabled_tools"])
         assert "mcp__*" in config["permissions"]["deny"]
         assert kwargs["cwd"] == str(saved.repo)
         assert args[args.index("--permission-mode") + 1] == "normal"
