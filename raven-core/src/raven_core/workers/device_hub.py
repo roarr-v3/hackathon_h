@@ -183,6 +183,12 @@ def _lower(value: Any) -> str:
     return value.casefold() if isinstance(value, str) else ""
 
 
+def _status(value: Any) -> str:
+    if isinstance(value, dict) and len(value) == 1:
+        value = next(iter(value))
+    return _lower(value)
+
+
 async def _simulators(developer: str) -> list[_Device]:
     data = _json(await _run(
         "/usr/bin/xcrun", "simctl", "list", "devices", "--json", developer_dir=developer,
@@ -245,21 +251,23 @@ def _core_device(raw: dict, simulator_ids: set[str]) -> _Device | None:
             "Cannot verify whether an iOS target is physical or simulated. Refresh it in Device Hub and retry."
         )
     reason = None
-    booted = _lower(_device_property(raw, "bootState")) == "booted"
+    booted = _status(_device_property(raw, "bootState")) == "booted"
     if kind == "device":
-        if _lower(connection.get("pairingState")) != "paired":
+        if _status(connection.get("pairingState")) != "paired":
             reason = "Physical device is not paired/authorized. Pair it in Device Hub and approve Trust on the device."
-        elif _lower(_device_property(raw, "developerModeStatus")) != "enabled":
+        elif _status(_device_property(raw, "developerModeStatus")) != "enabled":
             reason = "Physical device is not authorized for development. Enable Developer Mode on the device and retry."
         elif (
-            _lower(connection.get("state")) != "available" if "state" in connection
-            else _lower(connection.get("tunnelState")) != "connected"
+            _status(connection.get("state")) not in {"available", "connected"} if "state" in connection
+            else _status(connection.get("tunnelState")) != "connected"
         ):
             reason = "Physical device is unavailable. Connect it to this Mac, unlock it, and check its status in Device Hub."
     if reason is None and not booted:
         reason = "Device is not booted or its state cannot be verified. Start/unlock the selected target in Device Hub."
     name = _device_property(raw, "name")
     url = _device_property(raw, "screenViewingURL")
+    if isinstance(url, dict):
+        url = url.get("relative") or url.get("absolute")
     return _Device(
         udid or identifier, name if isinstance(name, str) else udid or identifier, kind, aliases,
         reason, url if isinstance(url, str) else None,

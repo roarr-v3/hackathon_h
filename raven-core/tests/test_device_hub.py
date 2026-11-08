@@ -289,6 +289,26 @@ def test_default_uses_any_available_iphone_not_a_simulator(commands):
     assert commands.args("boot") == []
 
 
+@pytest.mark.parametrize("developer_mode,available", [({"enabled": {"mode": 1}}, True), ({"disabled": {}}, False)])
+def test_xcode_27_enum_objects_and_connected_state(commands, developer_mode, available):
+    phone = core_device()
+    phone["properties"] = {
+        "state": {"developerModeStatus": developer_mode, "bootState": "booted"},
+        "connection": {
+            "pairingState": "paired", "state": "connected", "transportType": "wired",
+            "screenViewingURL": {"relative": f"devices://device/open?id={CORE_A}"},
+        },
+    }
+    commands.devices = [phone]
+    commands.details = phone
+    if available:
+        assert asyncio.run(device_hub.prepare_device(ExecutionProfile()))["id"] == PHONE_A
+        assert commands.args("open") == [("/usr/bin/open", "-a", APP, "-u", f"devices://device/open?id={CORE_A}")]
+    else:
+        with pytest.raises(WorkerUnavailable, match="Developer Mode"):
+            asyncio.run(device_hub.prepare_device(ExecutionProfile()))
+
+
 def test_default_without_an_available_iphone_never_falls_back_to_a_simulator(commands):
     with pytest.raises(WorkerUnavailable, match="No physical iPhone is available"):
         asyncio.run(device_hub.prepare_device(ExecutionProfile()))
