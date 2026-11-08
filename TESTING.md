@@ -8,7 +8,8 @@ The cloud agent installs `hai-agents[cli,desktop]>=1.4.3` and tries H local-runt
 first; if H cannot run, Devin executes the spec with its own computer use.
 `HAI_API_KEY`, and optional `HAI_MODEL` / `HAI_BASE_URL`, travel as sensitive
 session secrets, never in the prompt. Structured reports identify the actual driver
-and fallback reason. Session links are published via `report.ready`.
+and fallback reason. Session links appear immediately in `agent.message` text and
+in the final `report.ready` report's `devin_session_url` field.
 Polling starts at 15 seconds and backs off to 30 seconds; `RAVEN_DEVIN_TIMEOUT_S`
 defaults to 1800 and `RAVEN_DEVIN_MAX_ACU` to 10. Stop/timeout ends local polling;
 the remote session may continue and should be stopped from its Devin session link.

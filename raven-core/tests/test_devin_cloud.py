@@ -83,6 +83,26 @@ def test_payload_poll_and_driver(tmp_path, monkeypatch, cloud, driver):
     assert len(calls) == 3
     assert any(f"Driver: {driver}" in e.data.get("text", "") for e in events)
     assert any(e.type == "report.ready" and e.data["devin_session_url"] == "https://app.devin.ai/s/test" for e in events)
+    assert len([e for e in events if e.type == "report.ready"]) == 1
+    assert any(e.type == "agent.message" and "https://app.devin.ai/s/test" in e.data.get("text", "") for e in events)
+
+
+def test_cli_waits_for_verdict_after_cloud_report(tmp_path, monkeypatch, cloud, capsys):
+    from raven_core import _run_cli
+
+    def handler(request):
+        return httpx.Response(200, json={"session_id": "devin-test", "url": "https://app.devin.ai/s/test"}
+                              if request.method == "POST" else {"structured_output": output()})
+
+    monkeypatch.setattr(integrations, "TRANSPORT", httpx.MockTransport(handler))
+    raven = Raven(settings=Settings(artifacts_dir=tmp_path, reports=False), store=Store())
+    spec = Spec(name="cloud", agents=[SpecAgent(platform=Platform.linux, task="Verify")])
+    monkeypatch.setattr(raven, "load_spec", lambda name: spec)
+    monkeypatch.setattr("raven_core.server.Raven", lambda: raven)
+    assert asyncio.run(_run_cli("cloud", None, False)) == 0
+    printed = capsys.readouterr().out
+    assert "https://app.devin.ai/s/test" in printed
+    assert "agent.verdict" in printed and "run.status" in printed
 
 
 @pytest.mark.parametrize("missing", ["DEVIN_API_KEY", "DEVIN_ORG_ID"])

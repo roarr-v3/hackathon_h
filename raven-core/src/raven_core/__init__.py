@@ -81,7 +81,7 @@ async def _run_cli(spec: str, platforms: str | None, as_json: bool) -> int:
                 final = ev.data["status"]
                 if final != "failed" or not raven.settings.reports:
                     break
-            if ev.type == "report.ready" and ev.run_id == run.id:
+            if ev.type == "report.ready" and ev.run_id == run.id and ev.agent_id is None and final == "failed":
                 break
     except (KeyboardInterrupt, asyncio.CancelledError):
         raven.stop_all()

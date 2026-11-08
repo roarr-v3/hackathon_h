@@ -142,8 +142,6 @@ class DevinCloudHost(Host):
                         raise WorkerUnavailable("Devin API returned no session ID")
                     url = session.get("url")
                     url = url if isinstance(url, str) and url.startswith("https://app.devin.ai/") else None
-                    await send("report.ready", {"markdown": "Cloud QA session started", "linkup_sources": [],
-                                                "devin_session_url": url})
                     await message(f"Devin cloud session: {url or session_id}")
                     delay = INITIAL_POLL_S
                     last_state = None
