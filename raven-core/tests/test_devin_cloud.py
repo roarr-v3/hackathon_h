@@ -184,6 +184,29 @@ def test_server_skips_local_machine_management(tmp_path, monkeypatch, cloud):
     asyncio.run(main())
 
 
+@pytest.mark.parametrize("use_cloud", [True, False])
+def test_server_cloud_deadline_exceeds_default_cap(tmp_path, monkeypatch, cloud, use_cloud):
+    monkeypatch.setenv("RAVEN_DEVIN_TIMEOUT_S", "1800")
+    if not use_cloud:
+        monkeypatch.delenv("RAVEN_HOST_LINUX")
+    completed = []
+
+    async def runner(spec, platforms, start, run):
+        await asyncio.sleep(0.01)
+        completed.append(True)
+
+    async def main():
+        raven = Raven(settings=Settings(artifacts_dir=tmp_path, run_timeout_s=0.001, reports=False), store=Store())
+        raven.run_spec = runner
+        spec = Spec(name="cloud", agents=[SpecAgent(platform=Platform.linux, task="Verify")])
+        run = Run(spec=spec.name, platforms=spec.platforms)
+        raven.store.add_run(run)
+        await raven._run_task(run, spec, spec.platforms)
+
+    asyncio.run(main())
+    assert bool(completed) is use_cloud
+
+
 def test_stop_before_create(tmp_path, monkeypatch, cloud):
     def forbidden(request):
         pytest.fail("stopped cloud agent must not create a session")

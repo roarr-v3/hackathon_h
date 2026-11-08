@@ -549,7 +549,14 @@ class Raven:
     ) -> None:
         self._set_run_status(run, RunStatus.running)
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self.settings.run_timeout_s
+        timeout_s = self.settings.run_timeout_s
+        from raven_core.hosts.devin_cloud import selected, timeout_seconds
+
+        if any(selected(p) for p in platforms):
+            sd = _spec_dict(spec)
+            delays = [float(a.get("start_delay_s") or 0) for a in sd.get("agents", [])]
+            timeout_s = max(timeout_s, max(timeout_seconds(), float(sd.get("timeout_s") or 0)) + 120 + max([20, *delays]))
+        deadline = loop.time() + timeout_s
         try:
             run_spec = self._run_spec_fn()
             if run_spec is not None:
@@ -566,7 +573,7 @@ class Raven:
                     kwargs["placement"] = placement
                 res = run_spec(spec, platforms, self.start_agent, run, **kwargs)
                 if inspect.isawaitable(res):
-                    await asyncio.wait_for(res, timeout=self.settings.run_timeout_s)
+                    await asyncio.wait_for(res, timeout=timeout_s)
             else:
                 self._fallback_run_spec(spec, platforms, run, placement)
             await self._wait_agents(run.id, max(1.0, deadline - loop.time()))
