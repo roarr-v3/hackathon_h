@@ -4,8 +4,8 @@ A host knows how to (1) prepare the machine (hai-agents + raven_host.py), (2) sp
 host script with stdin/stdout pipes, (3) read back screenshot files it wrote.
 Selection per platform comes from env (later raven.yaml):
   RAVEN_HOST_LINUX   cua-local (default) | devin-cloud
-  RAVEN_HOST_MACOS   cua-local (default) | devin-cloud
-  RAVEN_HOST_WINDOWS home-pc
+  RAVEN_HOST_MACOS   cua-local (VM only; bare metal by default on a Mac)
+  RAVEN_HOST_WINDOWS home-pc (default) | devin-cloud
 Bare-metal runs (the target OS is this machine's; iOS in the Simulator on a Mac) use `LocalHost`.
 """
 
@@ -159,8 +159,13 @@ class LocalHost(Host):
 
 
 def get_host(platform: Platform) -> Host:
+    """Select a host; devin-cloud supports Linux and Windows only."""
     platform = Platform(platform)
     choice = os.environ.get(f"RAVEN_HOST_{platform.value.upper()}", "").strip()
+    if platform in (Platform.linux, Platform.windows) and choice == "devin-cloud":
+        from raven_core.hosts.devin_cloud import DevinCloudHost
+
+        return DevinCloudHost(platform)
     if platform == Platform.linux and choice in ("", "cua-local"):
         return DockerHost(platform, os.environ.get("RAVEN_LINUX_SANDBOX", "raven-linux"))
     raise WorkerUnavailable(

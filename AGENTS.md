@@ -11,7 +11,8 @@ channels (VMs have no Bluetooth, so never rely on BLE mesh).
    precise QA spec per platform in H's format (Setup / Task / Expected Result /
    Verification; report starts with `VERDICT: PASSED|FAILED`).
 3. **H Company does all computer use**: H's desktop agent (`holo`, `h/holo-desktop`)
-   runs *inside each test machine* and executes the specs in parallel.
+   runs *inside each test machine* and executes the specs in parallel. On `devin-cloud`
+   Linux/Windows hosts only, Devin computer use is the fallback if H cannot run.
 4. On failure: **Linkup** retrieves external context (web search only; it never sees our code).
 5. **Devin fixes** the code (same session), then Raven rebuilds and reruns the same specs.
 
@@ -22,8 +23,10 @@ planted in Swift bitchat (macOS + iOS) and bitchat-tui (Linux). Sources in `targ
 ## Configuration (`raven.yaml`, every axis switchable)
 - `devin: local | cloud` — local = Devin in t3code (ACP) / Devin CLI on this Mac;
   cloud = app.devin.ai sessions (Devin API). No "none" option.
-- `hosts.<platform>`: linux `cua-local | devin-cloud`, macos `cua-local | devin-cloud`,
-  ios `mac-simulator | devin-cloud`, windows `home-pc`.
+- `hosts.<platform>`: linux `cua-local | devin-cloud`, macos `cua-local` (or bare metal),
+  ios `mac-simulator`, windows `home-pc | devin-cloud`.
+  `RAVEN_HOST_LINUX=devin-cloud` / `RAVEN_HOST_WINDOWS=devin-cloud` use Devin v3 VMs:
+  H local runtime first, Devin computer use only if H cannot run. Defaults are unchanged.
 - `h_mode: local-runtime | agents-api | models-loop` — local-runtime (`holo --local`)
   is default: loop runs in the test machine, only model calls hit H. agents-api = hosted
   loop (Free plan: 3 concurrent sessions, ~60 sessions/month — budget carefully).

@@ -15,7 +15,10 @@ from raven_core.engine.holo import run_agent as run_models_loop
 
 async def run_agent(agent, worker, emit, inbox, stop, artifacts_dir, **kw: Any) -> None:
     from raven_core.hosts import Host
+    from raven_core.hosts.devin_cloud import DevinCloudHost
 
+    if isinstance(worker, DevinCloudHost):
+        return await worker.run(agent, emit, stop)
     if isinstance(worker, Host):
         from raven_core.engine.h_agent import run_h_agent
 

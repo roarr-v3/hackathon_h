@@ -78,10 +78,15 @@ def _bare_metal_worker(platform: Platform) -> Worker:
 def get_worker(platform: Platform, name: str | None = None, placement: Placement | str = Placement.auto) -> Worker:
     """Return a (cached) Worker for `platform`. Connection happens lazily on first call."""
     from raven_core.env import load_env
+    from raven_core.hosts.devin_cloud import selected
     from raven_core.placement import resolve
 
     load_env()
     platform = Platform(platform)
+    if not _faked(platform) and selected(platform):
+        from raven_core.hosts import get_host
+
+        return get_host(platform)  # type: ignore[return-value]
     where = None if _faked(platform) else resolve(platform, placement)
     key = (platform.value, name, where.value if where else "fake")
     if key in _cache:

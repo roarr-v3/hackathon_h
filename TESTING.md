@@ -1,3 +1,18 @@
+# Devin cloud Linux and Windows hosts
+
+Set `RAVEN_HOST_LINUX=devin-cloud` and/or `RAVEN_HOST_WINDOWS=devin-cloud`,
+plus `DEVIN_API_KEY` and `DEVIN_ORG_ID`. `DEVIN_API_BASE_V3` defaults to
+`https://api.devin.ai/v3`. macOS and the iOS Simulator are unaffected.
+Each selected platform gets one concurrent Devin session, including its spec setup.
+The cloud agent installs `hai-agents[cli,desktop]>=1.4.3` and tries H local-runtime
+first; if H cannot run, Devin executes the spec with its own computer use.
+`HAI_API_KEY`, and optional `HAI_MODEL` / `HAI_BASE_URL`, travel as sensitive
+session secrets, never in the prompt. Structured reports identify the actual driver
+and fallback reason. Session links are published via `report.ready`.
+Polling starts at 15 seconds and backs off to 30 seconds; `RAVEN_DEVIN_TIMEOUT_S`
+defaults to 1800 and `RAVEN_DEVIN_MAX_ACU` to 10. Stop/timeout ends local polling;
+the remote session may continue and should be stopped from its Devin session link.
+
 # Raven — build, run and test
 
 ## Everyday use (one click)

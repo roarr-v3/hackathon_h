@@ -346,7 +346,7 @@ class Raven:
                 except Exception as e:
                     error = e
             bare_metal = error is None and _is_bare_metal(worker)
-            if error is None and not _is_fake(worker):
+            if error is None and not _is_fake(worker) and getattr(worker, "kind", None) != "devin-cloud":
                 from raven_core import machines
 
                 async def say(text: str) -> None:

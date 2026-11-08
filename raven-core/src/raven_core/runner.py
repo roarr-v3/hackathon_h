@@ -10,6 +10,8 @@ import time
 from typing import Awaitable, Callable
 
 from raven_core.events import Agent, AgentStatus, CreateAgentRequest, Event, Placement, Platform, Run, RunStatus
+from raven_core.hosts.devin_cloud import selected as cloud_selected
+from raven_core.hosts.devin_cloud import timeout_seconds as cloud_timeout
 from raven_core.specs import Spec, SpecAgent
 from raven_core.workers import get_worker
 
@@ -107,6 +109,18 @@ async def run_spec(
 
     wanted = [Platform(p) for p in platforms] if platforms else spec.platforms
     chosen = [a for a in spec.agents if a.platform in wanted]
+    # A cloud machine owns setup and all roles on that platform, in one session.
+    cloud_platforms = {a.platform for a in chosen if cloud_selected(a.platform)}
+    for platform in cloud_platforms:
+        roles = [a for a in chosen if a.platform == platform]
+        task = (
+            "## Setup\n" + ("\n".join(spec.setup.get(platform, [])) or "Prepare the target application.")
+            + "\n\n## Task\n" + "\n\n".join(a.task for a in roles)
+            + "\n\n## Expected Result\nAll requirements stated in the task are satisfied."
+            + "\n\n## Verification\nVerify on screen and quote visible evidence; do not infer success."
+        )
+        chosen = [a for a in chosen if a.platform != platform]
+        chosen.append(SpecAgent(platform=platform, task=task, start_delay_s=max(a.start_delay_s or 0 for a in roles)))
     if not chosen:
         await set_status(RunStatus.failed)
         return
@@ -115,7 +129,8 @@ async def run_spec(
     try:
         # 1. setup apps on every selected platform, concurrently
         await asyncio.gather(
-            *(setup_platform(p, spec.setup[p], placement) for p in {a.platform for a in chosen} if spec.setup.get(p)),
+            *(setup_platform(p, spec.setup[p], placement) for p in {a.platform for a in chosen}
+              if spec.setup.get(p) and p not in cloud_platforms),
             return_exceptions=True,
         )
 
@@ -140,7 +155,7 @@ async def run_spec(
 
         # 3. wait for all agents to be terminal
         max_delay = max([SENDER_DELAY_S] + [a.start_delay_s or 0 for a in chosen])
-        deadline = time.monotonic() + spec.timeout_s + grace_s + max_delay
+        deadline = time.monotonic() + max(spec.timeout_s, cloud_timeout() if cloud_platforms else 0) + grace_s + max_delay
         results = None
         while True:
             if starters.done() and results is None:
