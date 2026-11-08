@@ -163,6 +163,8 @@ class Raven:
     def __init__(self, settings: Settings | None = None, store: Store | None = None) -> None:
         self.settings = settings or Settings()
         self.store = store or Store(persist_path=default_persist_path(self.settings.artifacts_dir))
+        if store is None:
+            self.store.load()
         self.execution_profiles = ExecutionProfiles(self.settings.artifacts_dir / "execution.json")
         # Engine hooks; None -> import from raven_core.* lazily.
         self.get_worker: Callable[..., Any] | None = None

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import raven_core.integrations as integrations
-from raven_core.events import CreateAgentRequest, Event
+from raven_core.events import Agent, AgentStatus, CreateAgentRequest, Event, Platform
 from raven_core.server import Raven, create_app
 from raven_core.server.config import Settings
 from raven_core.store import Store
@@ -183,6 +183,26 @@ def test_reply_to_finished_agent_continues_in_the_same_thread(client):
     assert r["agent_id"] == phone["id"]
     wait_until(lambda: client.get(f"/agents/{phone['id']}").json()["agent"]["original_task"].startswith("rebuild"))
     assert client.get(f"/agents/{phone['id']}").json()["agent"]["platform"] == "ios"
+
+
+def test_agent_history_survives_a_restart(tmp_path, monkeypatch):
+    monkeypatch.delenv("RAVEN_PERSIST", raising=False)
+    settings = Settings(token=None, artifacts_dir=tmp_path / "artifacts", specs_dir=tmp_path)
+    first = Raven(settings=settings)
+    done = Agent(platform=Platform.linux, worker="w", title="done", task="say hi")
+    busy = Agent(platform=Platform.macos, worker="w", title="busy", task="wait")
+    for agent in (done, busy):
+        first.store.emit(Event(type="agent.created", agent_id=agent.id, data={"agent": agent.model_dump(mode="json")}))
+    first.store.emit(Event(type="agent.verdict", agent_id=done.id, data={"passed": True, "reason": "all good"}))
+    first.store.emit(Event(type="agent.status", agent_id=busy.id, data={"status": "running"}))
+
+    restarted = Raven(settings=settings)
+    agents = restarted.store.agents
+    assert set(agents) == {done.id, busy.id}
+    assert agents[done.id].status == AgentStatus.passed and agents[done.id].verdict_reason == "all good"
+    assert [e.type for e in restarted.store.agent_events[done.id]] == ["agent.created", "agent.verdict"]
+    assert agents[busy.id].status == AgentStatus.stopped and not restarted.active_agents()
+    assert Raven(settings=settings).store.agents[busy.id].status == AgentStatus.stopped
 
 
 def test_stop_agent(client):

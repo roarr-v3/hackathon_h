@@ -206,6 +206,30 @@ class Store:
         except Exception:  # never let a malformed event kill the engine
             log.exception("failed to apply event %s", ev.type)
 
+    def load(self) -> None:
+        if self.persist_path is None or not self.persist_path.is_file():
+            return
+        with self.persist_path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = Event.model_validate_json(line)
+                except ValueError:
+                    continue
+                self._apply(event)
+                if event.agent_id:
+                    self.agent_events.setdefault(event.agent_id, []).append(event)
+                if event.run_id:
+                    self.run_events.setdefault(event.run_id, []).append(event)
+        for agent in list(self.agents.values()):
+            if agent.status not in TERMINAL_AGENT:
+                self._emit_now(Event(type="agent.message", agent_id=agent.id, data={
+                    "role": "system", "text": "Raven restarted before this agent finished.",
+                }))
+                self._emit_now(Event(type="agent.status", agent_id=agent.id, data={"status": AgentStatus.stopped.value}))
+        for run in list(self.runs.values()):
+            if run.status not in TERMINAL_RUN:
+                self._emit_now(Event(type="run.status", run_id=run.id, data={"status": RunStatus.stopped.value}))
+
     def _persist(self, event: Event) -> None:
         if self.persist_path is None:
             return
