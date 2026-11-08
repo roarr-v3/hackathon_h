@@ -177,6 +177,7 @@ def test_timeout(tmp_path, monkeypatch, cloud):
 
     agent, _ = execute(tmp_path, monkeypatch, handler)
     assert agent.status == AgentStatus.error
+    assert agent.verdict_reason is not None
     assert "timed out" in agent.verdict_reason
 
 
@@ -202,7 +203,9 @@ def test_server_skips_local_machine_management(tmp_path, monkeypatch, cloud):
     async def main():
         raven = Raven(settings=Settings(artifacts_dir=tmp_path), store=Store())
         agent = raven.start_agent(CreateAgentRequest(platform=Platform.windows, task="Verify"))
-        await raven.store.handles[agent.id].task
+        task = raven.store.handles[agent.id].task
+        assert task is not None
+        await task
         assert agent.status == AgentStatus.passed
 
     asyncio.run(main())
