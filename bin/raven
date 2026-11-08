@@ -23,13 +23,16 @@ pid_on_port() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1; }
 build_app() {
   echo "building Raven Agent (~20 s)…"
   (cd "$T3" && [ -d node_modules ] || pnpm install)
+  (cd "$T3/apps/desktop" && node scripts/ensure-electron-runtime.mjs >"$LOGS/electron.log" 2>&1) \
+    || { echo "Electron download failed; see $LOGS/electron.log" >&2; exit 1; }
   (cd "$T3" && PATH="$T3/node_modules/.bin:$PATH" npx vp run --filter @t3tools/desktop --filter t3 build >"$LOGS/build.log" 2>&1) \
     || { echo "build failed; see $LOGS/build.log" >&2; exit 1; }
 }
 
 open_app() {
   if app_up; then open -b "$APP_ID"; echo "Raven Agent is already running"; return 0; fi
-  [ -f "$T3/apps/desktop/dist-electron/main.cjs" ] && [ -f "$T3/apps/server/dist/bin.mjs" ] || build_app
+  [ -f "$T3/apps/desktop/dist-electron/main.cjs" ] && [ -f "$T3/apps/server/dist/bin.mjs" ] \
+    && [ -d "$T3/apps/desktop/node_modules/electron/dist" ] || build_app
   echo "opening Raven Agent"
   (cd "$T3" && T3CODE_HOME="$T3/.t3" nohup node apps/desktop/scripts/start-electron.mjs >>"$LOGS/raven-agent.log" 2>&1 &)
 }
