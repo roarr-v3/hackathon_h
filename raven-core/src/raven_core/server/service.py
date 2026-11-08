@@ -35,7 +35,7 @@ from raven_core.events import (
 from raven_core.execution import ExecutionProfiles
 from raven_core.placement import describe_host, requested
 from raven_core.server.config import Settings
-from raven_core.server.intents import HELP, parse_command, parse_platforms
+from raven_core.server.intents import HELP, follow_up_task, parse_command, task_platforms
 from raven_core.store import (
     TERMINAL_AGENT,
     TERMINAL_RUN,
@@ -832,14 +832,26 @@ class Raven:
             raise NotFound(agent_id)
         return a
 
-    def send_message(self, agent_id: str, text: str) -> bool:
+    def send_message(self, agent_id: str, text: str) -> str | None:
         agent = self.get_agent(agent_id)
         self.emit(Event(type="agent.message", agent_id=agent.id, run_id=agent.run_id, data={"role": "user", "text": text}))
+        if agent.status in TERMINAL_AGENT:
+            plats = task_platforms(text)
+            follow = self.start_agent(CreateAgentRequest(
+                platform=plats[0] if len(plats) == 1 else agent.platform,
+                task=follow_up_task(text, agent.original_task or agent.task), placement=requested(text),
+                model=agent.execution.model if agent.execution else None,
+                repo_path=agent.repo_path, previous_agent_id=agent.id,
+            ))
+            self.emit(Event(type="agent.message", agent_id=agent.id, run_id=agent.run_id, data={
+                "role": "system", "text": f"Re-running on {follow.platform.value} as {follow.id}.",
+            }))
+            return follow.id
         h = self.store.handles.get(agent_id)
         if h is None or (h.task is not None and h.task.done()):
-            return False
+            return None
         h.inbox.put_nowait(text)
-        return True
+        return agent.id
 
     def stop_agent(self, agent_id: str, reason: str | None = None, *, cause: StopCause = StopCause.user) -> Agent:
         """Ask the agent to stop; `reason` ends up in its verdict (default: stopped by the user)."""
@@ -1225,9 +1237,9 @@ class Raven:
     # ------------------------------------------------------------------ voice / text commands
     def command(self, text: str, agent_id: str | None = None) -> dict[str, Any]:
         if agent_id:
-            delivered = self.send_message(agent_id, text)
-            return {"action": "message", "agent_id": agent_id, "delivered": delivered,
-                    "detail": f"Sent to agent {agent_id}"}
+            target = self.send_message(agent_id, text)
+            return {"action": "message", "agent_id": target or agent_id, "delivered": target is not None,
+                    "detail": f"Sent to agent {target or agent_id}"}
         intent = parse_command(text, self.spec_names())
         if intent.kind == "run":
             run = self.create_run(
@@ -1255,10 +1267,10 @@ class Raven:
             return {"action": "help", "detail": HELP}
         running = [a for a in self.active_agents()]
         if len(running) == 1:
-            delivered = self.send_message(running[0].id, text)
-            return {"action": "message", "agent_id": running[0].id, "delivered": delivered,
+            target = self.send_message(running[0].id, text)
+            return {"action": "message", "agent_id": running[0].id, "delivered": target is not None,
                     "detail": f"Sent to {running[0].platform.value} agent"}
-        plats = parse_platforms(text)
+        plats = task_platforms(text)
         if len(plats) == 1:
             agent = self.start_agent(CreateAgentRequest(platform=plats[0], task=text, placement=requested(text)))
             return {"action": "agent", "agent": agent.model_dump(mode="json"),

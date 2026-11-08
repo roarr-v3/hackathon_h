@@ -31,7 +31,7 @@ from raven_core.acp.backend import HttpBackend, LocalBackend, agent_terminal
 from raven_core.acp.jsonrpc import Connection, MethodNotFound, RpcError
 from raven_core.events import Placement
 from raven_core.placement import host_platform, requested
-from raven_core.server.intents import HELP, parse_command, parse_platforms
+from raven_core.server.intents import EARLIER_TASK, HELP, follow_up_task, parse_command, task_platforms
 
 def raven_url() -> str:
     return os.environ.get("RAVEN_URL") or f"http://localhost:{os.environ.get('RAVEN_PORT') or 8787}"
@@ -90,7 +90,6 @@ CLIENT_INSTRUCTIONS_RE = re.compile(
 )
 USER_REQUEST_RE = re.compile(r"<user_request>(.*?)</user_request>", re.S | re.I)
 RETRY_RE = re.compile(r"(?:please\s+)?(?:retry|try again|again|re-?run(?: it)?|run it again|one more time)[.!]*", re.I)
-EARLIER_TASK = "\n\n(Earlier task in this conversation: "
 HANDOFF_USER_MESSAGE = "\nUser message:\n"
 
 
@@ -633,14 +632,12 @@ class RavenAcpAgent:
             return intent.platform.value, intent.task, wanted.value
         if s.last and RETRY_RE.fullmatch(text.strip()):
             return s.last
-        plats = parse_platforms(text)
+        plats = task_platforms(text)
         if len(plats) == 1:
             return plats[0].value, text, wanted.value
         if s.last:
             platform, earlier, placement = s.last
-            if EARLIER_TASK in earlier:
-                earlier = earlier.split(EARLIER_TASK, 1)[1].removesuffix(")")
-            return platform, f"{text}{EARLIER_TASK}{earlier})", wanted.value if wanted != Placement.auto else placement
+            return platform, follow_up_task(text, earlier), wanted.value if wanted != Placement.auto else placement
         return default_platform(), text, wanted.value
 
     async def _follow(self, s: Session, run_id: str | None = None, agent_id: str | None = None) -> str:

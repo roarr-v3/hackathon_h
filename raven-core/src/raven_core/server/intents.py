@@ -38,6 +38,8 @@ _ALIAS = {
     "ipad": Platform.ios,
 }
 _PLAT_WORD = r"(?:mac\s?os|os\s?x|mac|linux|ubuntu|windows|win|ios|iphone)"
+_MAC_APP_RE = re.compile(r"\b(?:xcode|device\s?hub)\b", re.I)
+EARLIER_TASK = "\n\n(Earlier task in this conversation: "
 _PLACEMENT_PREFIX_RE = re.compile(
     r"^(?:(?:in|on|inside|using)\s+(?:an?\s+|the\s+)?(?:vm|virtual\s+machine|sandbox|container)"
     r"|bare[\s-]?metal|(?:on\s+)?this\s+(?:mac|machine|computer))\s*[:,\-]?\s*",
@@ -73,6 +75,16 @@ def parse_platforms(text: str) -> list[Platform]:
         if p is not None and p not in out:
             out.append(p)
     return out
+
+
+def task_platforms(text: str) -> list[Platform]:
+    return [Platform.macos] if _MAC_APP_RE.search(text or "") else parse_platforms(text)
+
+
+def follow_up_task(text: str, earlier: str) -> str:
+    if EARLIER_TASK in earlier:
+        earlier = earlier.split(EARLIER_TASK, 1)[1].removesuffix(")")
+    return f"{text}{EARLIER_TASK}{earlier})"
 
 
 def _norm(s: str) -> str:

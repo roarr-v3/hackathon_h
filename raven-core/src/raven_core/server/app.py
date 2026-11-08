@@ -147,8 +147,8 @@ def create_app(raven: Raven | None = None) -> FastAPI:
 
     @app.post("/agents/{agent_id}/messages", dependencies=A)
     async def send_message(agent_id: str, req: SendMessageRequest) -> dict[str, Any]:
-        delivered = nf(raven.send_message, agent_id, req.text)
-        return {"ok": True, "delivered": delivered}
+        target = nf(raven.send_message, agent_id, req.text)
+        return {"ok": True, "delivered": target is not None, "agent_id": target}
 
     @app.post("/agents/{agent_id}/stop", dependencies=A, response_model=Agent)
     async def stop_agent(agent_id: str) -> Agent:

@@ -12,7 +12,7 @@ import raven_core.integrations as integrations
 from raven_core.events import Platform
 from raven_core.server import Raven, create_app
 from raven_core.server.config import Settings
-from raven_core.server.intents import match_spec, parse_command, parse_platforms
+from raven_core.server.intents import match_spec, parse_command, parse_platforms, task_platforms
 from raven_core.store import Store
 
 
@@ -97,5 +97,8 @@ def test_parse_agent_and_misc():
     assert parse_command("status", SPECS).kind == "list"
     assert parse_command("hello there", SPECS).kind == "unknown"
     assert parse_platforms("linux, macOS and Windows 11") == [Platform.linux, Platform.macos, Platform.windows]
+    assert task_platforms("open xcode and build the app for sinan's iphone") == [Platform.macos]
+    assert task_platforms("open Device Hub and control my iPhone") == [Platform.macos]
+    assert task_platforms("open settings on my iphone") == [Platform.ios]
     assert match_spec("geohash", SPECS) == "bitchat-geohash-interop"
     assert match_spec("zzz", SPECS) is None
